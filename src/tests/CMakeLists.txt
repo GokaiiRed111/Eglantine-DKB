@@ -32,6 +32,9 @@ add_executable(tests
     video_core/uniform_stream_reuse.cpp
     video_core/shader_invalidation.cpp
     video_core/descriptor_table.cpp
+    video_core/ampere_f2i.cpp
+    video_core/ampere_ldc.cpp
+    video_core/ampere_vote.cpp
     input_common/calibration_configuration_job.cpp
 )
 
