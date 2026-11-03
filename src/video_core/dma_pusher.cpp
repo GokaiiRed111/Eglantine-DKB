@@ -236,6 +236,12 @@ bool DmaPusher::Step() {
             command_resume_offset +=
                 ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
         }
+        if (Tegra::g_nx2_dump_request.exchange(false, std::memory_order_relaxed)) {
+            static std::atomic<u32> dumps{};
+            if (dumps.fetch_add(1) < 2) {
+                DumpCurrentEntry("macro failed");
+            }
+        }
         if (puller.HasPendingAcquire()) {
             return false;
         }
@@ -397,7 +403,11 @@ static const u32 g_semaphore_watch = [] {
 }();
 
 // EDEN_NX2_PB_CHECK also keeps the last parsed entries, for DumpCurrentEntry.
-static const bool g_record_parsed_entries = std::getenv("EDEN_NX2_PB_CHECK") != nullptr;
+// Diagnostics build (Bananza's freeze): on unless EDEN_NX2_PB_CHECK=0.
+static const bool g_record_parsed_entries = [] {
+    const char* value = std::getenv("EDEN_NX2_PB_CHECK");
+    return value == nullptr || value[0] != '0';
+}();
 
 void DmaPusher::WatchArgument(u32 method, u32 argument) const {
     const u32 watch = g_semaphore_watch;
@@ -668,6 +678,9 @@ void DmaPusher::ReportUnboundSubchannel() {
     if (reported.fetch_add(1) < 8) {
         LOG_WARNING(HW_GPU, "Dropping method {:#x} on unbound subchannel {}", dma_state.method,
                     dma_state.subchannel);
+        if (reported.load() == 1) {
+            DumpCurrentEntry("unbound subchannel");
+        }
     }
 }
 

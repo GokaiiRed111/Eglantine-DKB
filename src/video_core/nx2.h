@@ -49,6 +49,8 @@ inline void Nx2MarkGpuWritten(u64 device_address, u64 size) {
 // the split and flushing the caches (BufferCache::Nx2ReadListCopy).
 inline std::array<std::atomic<u64>, (u64{1} << (36 - Nx2WrittenPageBits)) / 64> g_nx2_command_list_pages{};
 inline std::atomic<bool> g_nx2_has_command_list_pages{false};
+/// Diagnostics: a macro failed (garbage parameters): the DMA pusher dumps the entries around it.
+inline std::atomic<bool> g_nx2_dump_request{false};
 
 inline void Nx2MarkCommandListPage(u64 device_address) {
     const u64 page = device_address >> Nx2WrittenPageBits;

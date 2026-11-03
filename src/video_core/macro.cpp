@@ -17,6 +17,7 @@
 
 #ifdef ARCHITECTURE_x86_64
 #include "common/x64/xbyak.h"
+#include "video_core/nx2.h"
 #include "video_core/macro_turing_jit.h"
 #endif
 
@@ -1484,6 +1485,7 @@ void MacroEngine::Execute(Core::System& system, Engines::Maxwell3D& maxwell3d, u
                 emit);
             if (!result.success) {
                 native_execution_failed = true;
+                Tegra::g_nx2_dump_request.store(true, std::memory_order_relaxed);
                 LOG_ERROR(HW_GPU, "Native MME (JIT) failed: start={:#x}, consumed={}/{}, error={}",
                           method, result.consumed, parameters.size(), result.error);
             }
