@@ -541,40 +541,26 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
     }
 }
 
-void DmaPusher::RefreshSnapshots() {
-    // Lists submitted before or during a suspension were read from memory when they ran: the
-    // game writes the commands an acquire guards before it releases it. But the GPU thread can
-    // reach them much later, after the game has refilled that memory for a later frame (Donkey
-    // Kong Bananza: a 2496-word entry held the next frame's commands, which swallowed a
-    // semaphore release, and two channels then waited on each other). The acquire was met just
-    // now, so their words are written by now: capture them again here and run those.
-    static const bool refresh = [] {
-        const char* value = std::getenv("EDEN_NX2_PB_RESNAPSHOT");
+void DmaPusher::KeepSnapshots() {
+    // Lists queued behind a suspension read memory when they run: games write the commands an
+    // acquire guards before they release it (256b1dc34, Mario Kart World after a present). An
+    // acquire another channel's GPU work released guards no CPU writes, though, and Donkey Kong
+    // Bananza refills its command memory for a later frame meanwhile: read from memory, a
+    // 2496-word entry ran the next frame's commands (a swallowed semaphore release, two channels
+    // waiting on each other, or garbage). Keep the words captured at submission for those.
+    // EDEN_NX2_PB_KEEP=0 reads memory as before.
+    static const bool keep = [] {
+        const char* value = std::getenv("EDEN_NX2_PB_KEEP");
         return value == nullptr || value[0] != '0';
     }();
-    if (!refresh) {
+    if (!keep) {
         return;
     }
     const u64 now = suspensions.load(std::memory_order_acquire);
-    for (size_t list_index = 0; list_index < dma_pushbuffer.size(); ++list_index) {
-        CommandList& list = dma_pushbuffer[list_index];
-        if (list.submitted_offsets.size() != list.command_lists.size() ||
-            list.snapshot_suspensions == now) {
-            continue;
+    for (CommandList& list : dma_pushbuffer) {
+        if (list.submitted_offsets.size() == list.command_lists.size()) {
+            list.snapshot_suspensions = now;
         }
-        // The entry being resumed rereads memory itself; the ones before it are done.
-        const size_t first = list_index == 0 ? dma_pushbuffer_subindex + 1 : 0;
-        for (size_t i = first; i < list.command_lists.size(); ++i) {
-            const CommandListHeader& header = list.command_lists[i];
-            if (header.size == 0 ||
-                list.submitted_offsets[i] + header.size > list.submitted_words.size()) {
-                continue;
-            }
-            memory_manager.ReadBlockUnsafe(header.addr,
-                                           list.submitted_words.data() + list.submitted_offsets[i],
-                                           size_t{header.size} * sizeof(u32));
-        }
-        list.snapshot_suspensions = now;
     }
 }
 

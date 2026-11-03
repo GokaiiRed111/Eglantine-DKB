@@ -47,6 +47,11 @@ namespace Tegra::Engines {
 /// Diagnostics: notes a semaphore operation (channel or source, operation, address, value, device
 /// address) for the history printed when a channel waits on a semaphore for long.
 void Nx2RecordSemaphore(u32 channel, u32 op, GPUVAddr address, u32 value, u64 device);
+/// Semaphore operations noted so far (Nx2RecordSemaphore).
+u64 Nx2SemaphoreCount();
+/// Whether a GPU release noted at or after `since` meets the acquire (operation, value) on the
+/// device address; false when the history no longer reaches back that far.
+bool Nx2ReleasedByGpuSince(u64 since, u64 device, u32 operation, u32 value);
 
 class Puller final {
 public:
@@ -83,6 +88,7 @@ public:
         u32 operation;
         std::chrono::steady_clock::time_point since;
         bool reported;
+        u64 history_start; ///< Semaphore operations noted before this acquire was issued
 
         [[nodiscard]] bool Matches(u32 current) const;
     };

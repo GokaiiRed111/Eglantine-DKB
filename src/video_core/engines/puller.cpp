@@ -68,12 +68,12 @@ struct SemaphoreRecord {
     u32 value;
     u64 device;
 };
-std::array<SemaphoreRecord, 256> g_semaphore_history{};
+std::array<SemaphoreRecord, 4096> g_semaphore_history{};
 std::atomic<u64> g_semaphore_count{};
 
 void PrintSemaphoreHistory(u64 device) {
     const u64 count = g_semaphore_count.load(std::memory_order_relaxed);
-    const u64 shown = (std::min<u64>)(count, g_semaphore_history.size());
+    const u64 shown = (std::min<u64>)(count, 256);
     u32 printed = 0;
     for (u64 i = count - shown; i < count; ++i) {
         const auto& record = g_semaphore_history[i % g_semaphore_history.size()];
@@ -93,6 +93,33 @@ void PrintSemaphoreHistory(u64 device) {
 void Nx2RecordSemaphore(u32 channel, u32 op, GPUVAddr address, u32 value, u64 device) {
     const u64 index = g_semaphore_count.fetch_add(1, std::memory_order_relaxed);
     g_semaphore_history[index % g_semaphore_history.size()] = {channel, op, address, value, device};
+}
+
+u64 Nx2SemaphoreCount() {
+    return g_semaphore_count.load(std::memory_order_relaxed);
+}
+
+bool Nx2ReleasedByGpuSince(u64 since, u64 device, u32 operation, u32 value) {
+    const u64 count = g_semaphore_count.load(std::memory_order_relaxed);
+    if (device == 0 || count - since > g_semaphore_history.size()) {
+        return false;
+    }
+    for (u64 i = since; i < count; ++i) {
+        const auto& record = g_semaphore_history[i % g_semaphore_history.size()];
+        // Releases: the back's (query cache, source 100) and the puller's (operation 2).
+        const bool release = record.channel == 100 || record.op == 2;
+        if (!release || record.device != device) {
+            continue;
+        }
+        const bool meets = operation == 1   ? record.value == value
+                           : operation == 4 ? record.value >= value
+                           : operation == 8 ? (record.value & value) != 0
+                                            : false;
+        if (meets) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool Puller::PendingAcquire::Matches(u32 current) const {
@@ -154,9 +181,15 @@ bool Puller::ResumeAcquire(DmaPusher& dma_pusher) {
     if (!CanResumeAcquire(dma_pusher)) {
         return false;
     }
+    const auto device = dma_pusher.memory_manager.GpuToCpuAddress(pending_acquire->address);
+    const bool released_by_gpu =
+        device && Nx2ReleasedByGpuSince(pending_acquire->history_start, *device,
+                                        pending_acquire->operation, pending_acquire->value);
     pending_acquire.reset();
     dma_pusher.suspensions.fetch_add(1, std::memory_order_release);
-    dma_pusher.RefreshSnapshots();
+    if (released_by_gpu) {
+        dma_pusher.KeepSnapshots();
+    }
     Nx2SemaphoreWaiters::Get().Remove(this);
     return true;
 }
@@ -282,6 +315,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             .operation = static_cast<u32>(op),
             .since = std::chrono::steady_clock::now(),
             .reported = false,
+            .history_start = Nx2SemaphoreCount(),
         };
         if (op != GpuSemaphoreOperation::AcquireEqual && op != GpuSemaphoreOperation::AcquireGequal &&
             op != GpuSemaphoreOperation::AcquireMask) {
