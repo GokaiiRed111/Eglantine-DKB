@@ -410,8 +410,14 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                         first = last;
                     }
                 }
+                // Diagnostics: the first resets, then every change of list size or of records
+                // (a record no reset reaches keeps counting, and its triangles overflow).
                 static u32 reset_logs{};
-                if (reset_logs < 5) {
+                static std::unordered_map<GPUVAddr, std::pair<u32, size_t>> last_reset;
+                auto& last = last_reset[list_begin];
+                const bool changed = last.first != count || last.second != records.size();
+                last = {count, records.size()};
+                if (reset_logs < 5 || (changed && reset_logs < 200)) {
                     ++reset_logs;
                     LOG_INFO(HW_GPU,
                              "Indirect draw reset: list {:#x}, {} records ({} written in {} writes)",

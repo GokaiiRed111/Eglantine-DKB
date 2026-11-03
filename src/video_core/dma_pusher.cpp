@@ -221,6 +221,7 @@ bool DmaPusher::Step() {
                 ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
         } else if (ReadGpuWrittenCommands(dma_state.dma_get, static_cast<u32>(header.size))) {
             const std::span<const CommandHeader> commands{command_headers.data(), header.size};
+            NoteGpuWrittenRecord(commands);
             RecordParsedEntry(header, commands);
             command_resume_offset +=
                 ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
@@ -228,6 +229,9 @@ bool DmaPusher::Step() {
             FlushGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
             Tegra::Memory::GpuGuestMemory<Tegra::CommandHeader, Tegra::Memory::GuestMemoryFlags::UnsafeRead>headers(memory_manager, dma_state.dma_get, header.size, &command_headers);
             const std::span<const CommandHeader> commands{headers.data(), headers.size()};
+            if (IsGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32))) {
+                NoteGpuWrittenRecord(commands);
+            }
             RecordParsedEntry(header, commands);
             command_resume_offset +=
                 ProcessCommands(commands.subspan(command_resume_offset), command_resume_offset);
@@ -524,6 +528,23 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
         subchannel->ConsumeSink(system);
         subchannel->current_dma_segment = dma_state.dma_get + dma_state.dma_word_offset;
         subchannel->CallMultiMethod(system, dma_state.method, base_start, num_methods, dma_state.method_count);
+    }
+}
+
+void DmaPusher::NoteGpuWrittenRecord(std::span<const CommandHeader> commands) {
+    // Diagnostics (Donkey Kong Bananza's terrain): a 5-word indirect draw record the GPU wrote,
+    // read as macro parameters. Its first word counts triangle indices from 0 each frame; a
+    // record no reset reaches keeps growing until its indices overflow into other memory.
+    if (commands.size() != 5 || dma_state.method_count == 0) {
+        return;
+    }
+    static std::atomic<u32> reports{};
+    const u32 indices = commands[0].argument;
+    if (indices > 0x30000 && reports.fetch_add(1, std::memory_order_relaxed) < 32) {
+        LOG_WARNING(HW_GPU,
+                    "GPU-written record at {:#x} counts {:#x} indices ({:08x} {:08x} {:08x} {:08x})",
+                    dma_state.dma_get, indices, commands[1].argument, commands[2].argument,
+                    commands[3].argument, commands[4].argument);
     }
 }
 

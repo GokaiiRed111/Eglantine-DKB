@@ -196,6 +196,7 @@ public:
     void CheckSubmitHash(const CommandListHeader& header, u64 submit_hash);
     void RecordParsedEntry(const CommandListHeader& header, std::span<const CommandHeader> commands);
     /// Whether the entry lies on device pages the GPU has written (NX2).
+    void NoteGpuWrittenRecord(std::span<const CommandHeader> commands);
     bool IsGpuWrittenCommands(GPUVAddr address, size_t size);
     /// Reads a command list on pages the GPU wrote into command_headers, from the copies the
     /// buffer cache made after the work that wrote them or from guest memory for pages flushed
