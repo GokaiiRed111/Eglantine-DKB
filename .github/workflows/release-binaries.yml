@@ -51,13 +51,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # This test branch builds only the two Windows packages.
+        # This test branch builds only the Windows PGO package (the MSVC one took three times as
+        # long, and the release waited for it).
         include:
           # The -pgo build is the same program compiled by clang against Eden's periodically
           # updated profile (https://github.com/Eden-CI/PGO). Windows uses MSYS2's MinGW clang like
           # Eden does; MSVC cannot read an LLVM .profdata file.
-          - platform: windows-x86_64
-            runner: windows-2022
           - platform: windows-x86_64-pgo
             runner: windows-2022
             pgo: true
