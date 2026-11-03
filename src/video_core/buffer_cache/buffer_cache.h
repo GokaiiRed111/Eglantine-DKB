@@ -1878,6 +1878,17 @@ auto BufferCache<P>::Nx2ReadListCopy(DAddr device_addr, std::span<u8> out) -> Nx
 }
 
 template <class P>
+bool BufferCache<P>::Nx2IsListPageWrittenByWork(DAddr page) {
+    if constexpr (IS_OPENGL) {
+        return false;
+    } else {
+        std::scoped_lock lock{nx2_list_mutex};
+        const auto it = nx2_list_pages.find(page);
+        return it != nx2_list_pages.end() && !it->second.draw_written && it->second.copy;
+    }
+}
+
+template <class P>
 void BufferCache<P>::Nx2NoteListSynced(DAddr page) {
     if constexpr (!IS_OPENGL) {
         std::scoped_lock lock{nx2_list_mutex};

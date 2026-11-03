@@ -21,7 +21,6 @@
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
 #include "video_core/memory_manager.h"
-#include "video_core/nx2.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/textures/texture.h"
@@ -883,15 +882,6 @@ bool FrontSkipSame() {
     return skip;
 }
 
-// A geometry program is bound: its draws can write command lists the front reads later (Donkey
-// Kong Bananza's terrain culling counts triangles into indirect draw records), so the front notes
-// them as writers like compute work, and the back copies the pages they write.
-bool FrontGeometryBound(const std::array<u32, Maxwell3D::Regs::NUM_REGS>& regs) {
-    constexpr size_t geometry = MAXWELL3D_REG_INDEX(pipelines) +
-                                4 * sizeof(Maxwell3D::Regs::Pipeline) / sizeof(u32);
-    return (regs[geometry] & 1) != 0;
-}
-
 } // Anonymous namespace
 
 Maxwell3D::FrontState& Maxwell3D::Front(Core::System& system, VideoCommon::GpuSplit& split) {
@@ -910,7 +900,6 @@ Maxwell3D::FrontState& Maxwell3D::Front(Core::System& system, VideoCommon::GpuSp
         macro_params.clear();
         executing_macro = 0;
         front_macros = true;
-        Tegra::g_nx2_front_notes_geometry.store(true, std::memory_order_relaxed);
     }
     return *front;
 }
@@ -935,7 +924,6 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
         fs.control_writes[fs.control_count++ % fs.control_writes.size()] = {
             argument, static_cast<u32>(fs.control), from_macro ? 2U : 1U};
     }
-    bool draw_method = false;
     if (!execution_mask[method]) {
         // Nothing would change on the back: CallMethod and ConsumeSinkImpl skip same-value state
         // writes, and the shadow RAM (tracked by default) holds the value already.
@@ -979,7 +967,6 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
                 fs.regs[MAXWELL3D_REG_INDEX(const_buffer.offset)] += sizeof(u32);
             } else if (!FrontHandledOutsideDrawManager(method)) {
                 fs.draw_pending = true;
-                draw_method = true;
             }
             break;
         }
@@ -988,9 +975,6 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
         split.MacroWrite(this, method, argument);
     } else {
         split.Method(this, method, argument, is_last_call, nullptr);
-    }
-    if (draw_method && FrontGeometryBound(fs.regs)) {
-        split.NoteWriter();
     }
 }
 
@@ -1026,7 +1010,6 @@ void Maxwell3D::FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit
     }
     // What CallMultiMethod does to the registers on the back, then one entry for all the words.
     constexpr u32 cb_data = MAXWELL3D_REG_INDEX(const_buffer.buffer);
-    bool draw_method = false;
     const auto tracked = [&fs] {
         return fs.control == Regs::ShadowRamControl::Track ||
                fs.control == Regs::ShadowRamControl::TrackWithFilter;
@@ -1047,7 +1030,6 @@ void Maxwell3D::FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit
             fs.regs[method] = last;
         }
         fs.draw_pending = true;
-        draw_method = true;
     } else {
         // CallMethod for each word, macro uploads among them (load_mme.instruction). A word may
         // change the shadow RAM mode for the next (a run of SET_SHADOW_RAM_CONTROL writes).
@@ -1093,16 +1075,12 @@ void Maxwell3D::FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit
             default:
                 if (!FrontHandledOutsideDrawManager(method)) {
                     fs.draw_pending = true;
-                    draw_method = true;
                 }
                 break;
             }
         }
     }
     split.MultiMethod(this, method, base_start, amount, methods_pending, nullptr);
-    if (draw_method && FrontGeometryBound(fs.regs)) {
-        split.NoteWriter();
-    }
 }
 
 void Maxwell3D::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split,

@@ -111,6 +111,12 @@ public:
     /// Switch 2: the front flushed this command list page with the split drained.
     virtual void NoteGpuWrittenCommandListSynced([[maybe_unused]] DAddr page) {}
 
+    /// Switch 2: only compute or copy work has written the command list page (its copies hold
+    /// the whole page), so flushing it whole brings no older GPU words over CPU-written lists.
+    virtual bool IsGpuWrittenCommandListPageWholly([[maybe_unused]] DAddr page) {
+        return false;
+    }
+
     /// Check if the the specified memory area requires flushing to CPU Memory.
     virtual bool MustFlushRegion(DAddr addr, u64 size,
                                  VideoCommon::CacheType which = VideoCommon::CacheType::All) = 0;

@@ -49,9 +49,6 @@ inline void Nx2MarkGpuWritten(u64 device_address, u64 size) {
 // the split and flushing the caches (BufferCache::Nx2ReadListCopy).
 inline std::array<std::atomic<u64>, (u64{1} << (36 - Nx2WrittenPageBits)) / 64> g_nx2_command_list_pages{};
 inline std::atomic<bool> g_nx2_has_command_list_pages{false};
-/// The split's front runs the 3D engine's macros and notes draws with a geometry program as
-/// writers of command lists (GpuSplit::NoteWriter), so the back can copy the pages they write.
-inline std::atomic<bool> g_nx2_front_notes_geometry{false};
 
 inline void Nx2MarkCommandListPage(u64 device_address) {
     const u64 page = device_address >> Nx2WrittenPageBits;
@@ -83,7 +80,6 @@ inline void Nx2ClearGpuWrittenPages() {
         word.store(0, std::memory_order_relaxed);
     }
     g_nx2_has_command_list_pages.store(false, std::memory_order_relaxed);
-    g_nx2_front_notes_geometry.store(false, std::memory_order_relaxed);
 }
 
 [[nodiscard]] inline bool Nx2IsGpuWritten(u64 device_address) {

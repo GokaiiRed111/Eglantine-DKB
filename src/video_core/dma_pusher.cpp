@@ -628,6 +628,24 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
     VideoCommon::GpuSplit::Get().Drain();
     const GPUVAddr first_page = address & ~GPUVAddr{0xfff};
     const GPUVAddr end_page = (address + size + 0xfff) & ~GPUVAddr{0xfff};
+    // Pages draws write (Donkey Kong Bananza's terrain culling writes its indirect draw records
+    // through storage buffers that span its CPU-written command lists too), or that nothing but
+    // this read has shown to be written only by compute or copy work: flush just this list, as
+    // PokeDinner does. Flushed whole, older GPU words came over lists the CPU had written since
+    // (macros missing their parameters, a garbage compute descriptor, then a hang).
+    bool wholly = rasterizer != nullptr;
+    for (GPUVAddr page = first_page; wholly && page < end_page; page += 0x1000) {
+        if (const auto device = memory_manager.GpuToCpuAddress(page);
+            device && Tegra::Nx2IsGpuWritten(*device)) {
+            wholly = rasterizer->IsGpuWrittenCommandListPageWholly(*device);
+        }
+    }
+    if (!wholly) {
+        if (memory_manager.IsMemoryDirty(address, size, VideoCommon::CacheType::BufferCache)) {
+            memory_manager.FlushRegion(address, size, VideoCommon::CacheType::BufferCache);
+        }
+        return;
+    }
     if (memory_manager.IsMemoryDirty(first_page, end_page - first_page,
                                      VideoCommon::CacheType::BufferCache)) {
         memory_manager.FlushRegion(first_page, end_page - first_page,
