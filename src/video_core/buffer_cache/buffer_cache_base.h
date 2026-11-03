@@ -342,13 +342,6 @@ public:
     Nx2ListRead Nx2ReadListCopy(DAddr device_addr, std::span<u8> out);
     /// Front thread, the split drained: the command list page was flushed to guest memory.
     void Nx2NoteListSynced(DAddr page);
-    /// The draw being recorded has a geometry program (its list page writes are geometry_written).
-    void Nx2SetGeometryDraw(bool geometry) {
-        nx2_geometry_draw = geometry;
-    }
-    /// Front thread, the split drained: flushes every command list page not synced since the
-    /// last geometry draw the front sent, with one wait for the GPU, and notes them synced.
-    void Nx2FlushGeometryListPages();
     /// CPU and inline writes: they reach guest memory, so a synced page stays synced, but its copy
     /// no longer holds the page.
     void Nx2NoteListHostWrite(DAddr device_addr, u64 size);
@@ -663,11 +656,6 @@ private:
         /// once: the front can't tell from what it sent whether such a write is still queued, so
         /// the page's lists always drain the split instead of reading a copy.
         bool draw_written{};
-        /// Written by draws with a geometry program, which the front counts as it sends them
-        /// (g_nx2_geometry_draws); such pages are never read from a copy.
-        bool geometry_written{};
-        /// The count when the front last flushed the page: synced only while it is unchanged.
-        u64 synced_geometry_draws{};
         std::optional<Nx2Staging> copy;
     };
     std::mutex nx2_list_mutex; ///< nx2_list_pages: the split's front reads the copies
@@ -676,7 +664,6 @@ private:
     std::vector<std::pair<u64, Nx2Staging>> nx2_retired_list_copies;
     boost::container::small_vector<std::pair<BufferId, DAddr>, 8> nx2_list_copy_requests;
     bool nx2_collect_list_copies{};
-    bool nx2_geometry_draw{};
 };
 
 } // namespace VideoCommon

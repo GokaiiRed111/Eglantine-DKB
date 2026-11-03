@@ -422,11 +422,18 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
             return;
         }
     }
-    // Storage writes of draws with a geometry program to command list pages are synced by the
-    // count of such draws the split's front sent (BufferCache::Nx2ListPage::geometry_written).
-    buffer_cache.Nx2SetGeometryDraw(pipeline->UniqueHash(4) != 0);
+    // Draws with a geometry program write command lists the split's front reads (Bananza's
+    // terrain culling counts into indirect draw records): copy the pages they write for it right
+    // after the draw, as for compute work. The front notes these draws as writers.
+    const bool list_writer = pipeline->UniqueHash(4) != 0 &&
+                             Tegra::g_nx2_front_notes_geometry.load(std::memory_order_relaxed);
+    if (list_writer) {
+        buffer_cache.Nx2CollectListCopies(true);
+    }
     SCOPE_EXIT {
-        buffer_cache.Nx2SetGeometryDraw(false);
+        if (list_writer) {
+            buffer_cache.Nx2CollectListCopies(false);
+        }
     };
     // update engine as channel may be different.
     pipeline->SetEngine(maxwell3d, gpu_memory);
@@ -458,6 +465,9 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
     {
         Profile::Scope scope{Profile::Zone::DrawRecord};
         draw_func();
+    }
+    if (list_writer) {
+        SubmitNx2ListCopies();
     }
     submitted = true;
     static u32 native_capture_count{};
@@ -1166,11 +1176,6 @@ VideoCore::RasterizerInterface::GpuWrittenList RasterizerVulkan::ReadGpuWrittenC
 
 void RasterizerVulkan::NoteGpuWrittenCommandListSynced(DAddr page) {
     buffer_cache.Nx2NoteListSynced(page);
-}
-
-void RasterizerVulkan::FlushGpuWrittenListPages() {
-    std::scoped_lock lock{buffer_cache.mutex};
-    buffer_cache.Nx2FlushGeometryListPages();
 }
 
 void RasterizerVulkan::FlushRegion(DAddr addr, u64 size, VideoCommon::CacheType which) {

@@ -435,9 +435,6 @@ void DmaPusher::CallMethod(u32 argument) {
         SCOPE_EXIT {
             if (writer) {
                 split.NoteWriter();
-                Tegra::g_nx2_geometry_draws_at_writer.store(
-                    Tegra::g_nx2_geometry_draws.load(std::memory_order_relaxed),
-                    std::memory_order_relaxed);
             }
         };
         if (split.Active()) {
@@ -497,9 +494,6 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
         SCOPE_EXIT {
             if (writer) {
                 split.NoteWriter();
-                Tegra::g_nx2_geometry_draws_at_writer.store(
-                    Tegra::g_nx2_geometry_draws.load(std::memory_order_relaxed),
-                    std::memory_order_relaxed);
             }
         };
         if (split.Active()) {
@@ -611,11 +605,6 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
     // that writes these words among it). The whole pages are flushed: their next lists read
     // guest memory until GPU work writes them again.
     VideoCommon::GpuSplit::Get().Drain();
-    if (rasterizer != nullptr) {
-        // Every list page not synced since the last geometry draw (Bananza's terrain records)
-        // at once, so the next lists on them read guest memory until another one is sent.
-        rasterizer->FlushGpuWrittenListPages();
-    }
     const GPUVAddr first_page = address & ~GPUVAddr{0xfff};
     const GPUVAddr end_page = (address + size + 0xfff) & ~GPUVAddr{0xfff};
     if (memory_manager.IsMemoryDirty(first_page, end_page - first_page,
