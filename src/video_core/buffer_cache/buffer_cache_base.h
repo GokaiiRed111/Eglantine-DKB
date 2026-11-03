@@ -346,8 +346,8 @@ public:
     void Nx2SetGeometryDraw(bool geometry) {
         nx2_geometry_draw = geometry;
     }
-    /// Front thread, the split drained: flushes every page geometry draws write, with one wait
-    /// for the GPU, and notes them synced.
+    /// Front thread, the split drained: flushes every command list page not synced since the
+    /// last geometry draw the front sent, with one wait for the GPU, and notes them synced.
     void Nx2FlushGeometryListPages();
     /// CPU and inline writes: they reach guest memory, so a synced page stays synced, but its copy
     /// no longer holds the page.
@@ -663,9 +663,10 @@ private:
         /// once: the front can't tell from what it sent whether such a write is still queued, so
         /// the page's lists always drain the split instead of reading a copy.
         bool draw_written{};
-        /// Written by draws with a geometry program only, which the front counts as it sends
-        /// them (g_nx2_geometry_draws): synced while that count is the one it was flushed at.
+        /// Written by draws with a geometry program, which the front counts as it sends them
+        /// (g_nx2_geometry_draws); such pages are never read from a copy.
         bool geometry_written{};
+        /// The count when the front last flushed the page: synced only while it is unchanged.
         u64 synced_geometry_draws{};
         std::optional<Nx2Staging> copy;
     };

@@ -49,11 +49,13 @@ inline void Nx2MarkGpuWritten(u64 device_address, u64 size) {
 // the split and flushing the caches (BufferCache::Nx2ReadListCopy).
 inline std::array<std::atomic<u64>, (u64{1} << (36 - Nx2WrittenPageBits)) / 64> g_nx2_command_list_pages{};
 inline std::atomic<bool> g_nx2_has_command_list_pages{false};
-/// Draw methods the split's front sent while a geometry program was bound: only such draws write
-/// the command list pages BufferCache::Nx2ListPage::geometry_written names, so those pages stay
-/// synced while this count is unchanged (Donkey Kong Bananza's terrain culling program counts
-/// triangles into indirect draw records that later command lists read).
+/// Draw methods the split's front sent while a geometry program was bound (Donkey Kong Bananza's
+/// terrain culling program counts triangles into indirect draw records that later command lists
+/// read). A command list page flushed at one count is synced while the count is unchanged.
 inline std::atomic<u64> g_nx2_geometry_draws{0};
+/// g_nx2_geometry_draws when the front last sent compute or copy work: a list copy made after
+/// that work is current only while no geometry draw was sent since.
+inline std::atomic<u64> g_nx2_geometry_draws_at_writer{0};
 /// The split's front runs the 3D engine's macros and so counts g_nx2_geometry_draws.
 inline std::atomic<bool> g_nx2_front_counts_geometry{false};
 

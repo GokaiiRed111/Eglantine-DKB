@@ -1852,7 +1852,10 @@ auto BufferCache<P>::Nx2ReadListCopy(DAddr device_addr, std::span<u8> out) -> Nx
             return Nx2ListRead::Unknown;
         }
         const auto current = [&](const Nx2ListPage& entry) {
+            // A geometry draw sent since the last compute or copy work may still write the page.
             return entry.copy && !entry.draw_written && !entry.geometry_written &&
+                   Tegra::g_nx2_geometry_draws.load(std::memory_order_relaxed) ==
+                       Tegra::g_nx2_geometry_draws_at_writer.load(std::memory_order_relaxed) &&
                    entry.copy_writes == entry.writes &&
                    offset >= entry.copy_begin && offset + out.size() <= entry.copy_end;
         };
@@ -1866,10 +1869,11 @@ auto BufferCache<P>::Nx2ReadListCopy(DAddr device_addr, std::span<u8> out) -> Nx
             }
             const Nx2ListPage& entry = it->second;
             // Pages the CPU writes the lists of (GPU-written once, long before) stay synced.
+            // Geometry draws the front sent since the flush may be queued yet: they can write any
+            // page, even one they never wrote before.
             if (!entry.draw_written && entry.synced_writes == entry.writes &&
-                (!entry.geometry_written ||
-                 entry.synced_geometry_draws ==
-                     Tegra::g_nx2_geometry_draws.load(std::memory_order_relaxed))) {
+                entry.synced_geometry_draws ==
+                    Tegra::g_nx2_geometry_draws.load(std::memory_order_relaxed)) {
                 return Nx2ListRead::Synced;
             }
             if (!current(entry)) {
@@ -1914,8 +1918,7 @@ void BufferCache<P>::Nx2FlushGeometryListPages() {
         {
             std::scoped_lock lock{nx2_list_mutex};
             for (const auto& [page, entry] : nx2_list_pages) {
-                if (entry.geometry_written && !entry.draw_written &&
-                    (entry.synced_writes != entry.writes ||
+                if (!entry.draw_written && (entry.synced_writes != entry.writes ||
                      entry.synced_geometry_draws != geometry_draws)) {
                     pages.push_back(page);
                 }
