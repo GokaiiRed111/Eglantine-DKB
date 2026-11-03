@@ -4,9 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <cstdlib>
 #include <optional>
-#include <string_view>
 #include <unordered_map>
 
 #include <boost/container/flat_set.hpp>
@@ -399,15 +397,7 @@ std::optional<StorageBufferAddr> Track(const IR::Value& value, const Bias* bias,
         }
         return operand;
     };
-    // EDEN_NX2_LOADED_POINTERS=global keeps loaded pointers apart (global memory fallbacks at
-    // run time). By default they are tracked to the buffer they were loaded from, as PokeDinner
-    // does: Donkey Kong Bananza froze with the fallbacks after a while of breaking terrain (its
-    // command lists read as garbage), and does not on PokeDinner.
-    static const bool loaded_pointers_global = [] {
-        const char* value = std::getenv("EDEN_NX2_LOADED_POINTERS");
-        return value != nullptr && std::string_view{value} == "global";
-    }();
-    if (follow_loaded_pointers || !loaded_pointers_global) {
+    if (follow_loaded_pointers) {
         return BreadthFirstSearch(value, pred);
     }
     return BreadthFirstSearch(value, pred, stop_at_memory);
