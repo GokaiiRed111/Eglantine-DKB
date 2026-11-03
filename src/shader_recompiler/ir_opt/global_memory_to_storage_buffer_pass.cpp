@@ -173,6 +173,22 @@ bool IsGlobalMemoryWrite(const IR::Inst& inst) {
     }
 }
 
+/// Returns true when the instruction is an atomic operation on global memory
+bool IsGlobalAtomic(const IR::Inst& inst) {
+    switch (inst.GetOpcode()) {
+    case IR::Opcode::WriteGlobalS8:
+    case IR::Opcode::WriteGlobalU8:
+    case IR::Opcode::WriteGlobalS16:
+    case IR::Opcode::WriteGlobalU16:
+    case IR::Opcode::WriteGlobal32:
+    case IR::Opcode::WriteGlobal64:
+    case IR::Opcode::WriteGlobal128:
+        return false;
+    default:
+        return IsGlobalMemoryWrite(inst);
+    }
+}
+
 /// Converts a global memory opcode to its storage buffer equivalent
 IR::Opcode GlobalToStorage(IR::Opcode opcode) {
     switch (opcode) {
@@ -339,7 +355,8 @@ std::optional<LowAddrInfo> TrackLowAddress(IR::Inst* inst) {
 }
 
 /// Tries to track the storage buffer address used by a global memory instruction
-std::optional<StorageBufferAddr> Track(const IR::Value& value, const Bias* bias) {
+std::optional<StorageBufferAddr> Track(const IR::Value& value, const Bias* bias,
+                                       bool follow_loaded_pointers = false) {
     const auto pred{[bias](const IR::Inst* inst) -> std::optional<StorageBufferAddr> {
         if (inst->GetOpcode() != IR::Opcode::GetCbufU32 &&
             inst->GetOpcode() != IR::Opcode::GetCbufU32x2) {
@@ -380,6 +397,9 @@ std::optional<StorageBufferAddr> Track(const IR::Value& value, const Bias* bias)
         }
         return operand;
     };
+    if (follow_loaded_pointers) {
+        return BreadthFirstSearch(value, pred);
+    }
     return BreadthFirstSearch(value, pred, stop_at_memory);
 }
 
@@ -417,6 +437,21 @@ void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info) 
     if (!storage_buffer) {
         // If it fails, track without a bias
         storage_buffer = cached_track(nullptr, info.unbiased_tracks);
+        if (!storage_buffer && IsGlobalAtomic(inst)) {
+            // Atomics have no global memory fallback: an untracked one fails the whole pipeline.
+            // Through a pointer loaded from memory, use the buffer the pointer was loaded from, as
+            // before loaded pointers were told apart (right while the pointer stays inside it).
+            storage_buffer = Track(low_addr, &nvn_bias, true);
+            if (!storage_buffer) {
+                storage_buffer = Track(low_addr, nullptr, true);
+            }
+            if (storage_buffer) {
+                LOG_WARNING(Shader,
+                            "Atomic through a loaded pointer: using the storage buffer at "
+                            "c{}[{:#x}] it was loaded from",
+                            storage_buffer->index, storage_buffer->offset);
+            }
+        }
         if (!storage_buffer) {
             // If that also fails, use NVN fallbacks
             LOG_WARNING(Shader, "Storage buffer failed to track, using global memory fallbacks");
