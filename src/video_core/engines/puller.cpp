@@ -156,6 +156,7 @@ bool Puller::ResumeAcquire(DmaPusher& dma_pusher) {
     }
     pending_acquire.reset();
     dma_pusher.suspensions.fetch_add(1, std::memory_order_release);
+    dma_pusher.RefreshSnapshots();
     Nx2SemaphoreWaiters::Get().Remove(this);
     return true;
 }

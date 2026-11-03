@@ -74,7 +74,7 @@ bool DmaPusher::Step() {
     const size_t command_list_size = command_list.command_lists.size();
 
     if (prefetch_size == 0 && command_list_size == 0) {
-        dma_pushbuffer.pop();
+        dma_pushbuffer.pop_front();
         dma_pushbuffer_subindex = 0;
         return true;
     }
@@ -87,7 +87,7 @@ bool DmaPusher::Step() {
             return false;
         }
         command_resume_offset = 0;
-        dma_pushbuffer.pop();
+        dma_pushbuffer.pop_front();
         return true;
     }
 
@@ -265,7 +265,7 @@ bool DmaPusher::Step() {
             }
         }
         parked_methods.clear();
-        dma_pushbuffer.pop();
+        dma_pushbuffer.pop_front();
         dma_pushbuffer_subindex = 0;
     } else {
         signal_sync = command_list.command_lists[dma_pushbuffer_subindex].sync && Settings::values.sync_memory_operations.GetValue();
@@ -538,6 +538,43 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
         subchannel->ConsumeSink(system);
         subchannel->current_dma_segment = dma_state.dma_get + dma_state.dma_word_offset;
         subchannel->CallMultiMethod(system, dma_state.method, base_start, num_methods, dma_state.method_count);
+    }
+}
+
+void DmaPusher::RefreshSnapshots() {
+    // Lists submitted before or during a suspension were read from memory when they ran: the
+    // game writes the commands an acquire guards before it releases it. But the GPU thread can
+    // reach them much later, after the game has refilled that memory for a later frame (Donkey
+    // Kong Bananza: a 2496-word entry held the next frame's commands, which swallowed a
+    // semaphore release, and two channels then waited on each other). The acquire was met just
+    // now, so their words are written by now: capture them again here and run those.
+    static const bool refresh = [] {
+        const char* value = std::getenv("EDEN_NX2_PB_RESNAPSHOT");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (!refresh) {
+        return;
+    }
+    const u64 now = suspensions.load(std::memory_order_acquire);
+    for (size_t list_index = 0; list_index < dma_pushbuffer.size(); ++list_index) {
+        CommandList& list = dma_pushbuffer[list_index];
+        if (list.submitted_offsets.size() != list.command_lists.size() ||
+            list.snapshot_suspensions == now) {
+            continue;
+        }
+        // The entry being resumed rereads memory itself; the ones before it are done.
+        const size_t first = list_index == 0 ? dma_pushbuffer_subindex + 1 : 0;
+        for (size_t i = first; i < list.command_lists.size(); ++i) {
+            const CommandListHeader& header = list.command_lists[i];
+            if (header.size == 0 ||
+                list.submitted_offsets[i] + header.size > list.submitted_words.size()) {
+                continue;
+            }
+            memory_manager.ReadBlockUnsafe(header.addr,
+                                           list.submitted_words.data() + list.submitted_offsets[i],
+                                           size_t{header.size} * sizeof(u32));
+        }
+        list.snapshot_suspensions = now;
     }
 }
 
