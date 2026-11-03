@@ -742,15 +742,23 @@ void DmaPusher::DumpCurrentEntry(const char* reason) {
     if (dma_pushbuffer.empty()) {
         return;
     }
-    const auto& lists = dma_pushbuffer.front().command_lists;
-    const size_t first = dma_pushbuffer_subindex >= 2 ? dma_pushbuffer_subindex - 2 : 0;
+    const auto& list = dma_pushbuffer.front();
+    const auto& lists = list.command_lists;
+    const size_t first = dma_pushbuffer_subindex >= 4 ? dma_pushbuffer_subindex - 4 : 0;
     for (size_t i = first; i <= dma_pushbuffer_subindex && i < lists.size(); ++i) {
         const CommandListHeader& header = lists[i];
-        LOG_WARNING(HW_GPU, "  entry {} of {}: addr={:#x} size={:#x}", i, lists.size(),
-                    header.addr.Value(), header.size.Value());
+        // Which read the entry took: on GPU-written pages its words are read when it runs, else
+        // the words captured at submission ("snap", where they differ from memory now).
+        const bool has_snapshot = i < list.submitted_offsets.size();
+        LOG_WARNING(HW_GPU, "  entry {} of {}: addr={:#x} size={:#x} gpu-written pages {} snapshot {}",
+                    i, lists.size(), header.addr.Value(), header.size.Value(),
+                    IsGpuWrittenCommands(header.addr, size_t{header.size} * sizeof(u32)),
+                    has_snapshot);
         for (u64 word = 0; word < std::min<u64>(header.size, 0x80); word += 8) {
             std::string gpu_line;
             std::string cpu_line;
+            std::string snap_line;
+            bool snap_differs = false;
             for (u64 j = word; j < std::min<u64>(header.size, word + 8); ++j) {
                 const GPUVAddr address = header.addr + j * sizeof(u32);
                 const u32 gpu_value = memory_manager.Read<u32>(address);
@@ -758,9 +766,19 @@ void DmaPusher::DumpCurrentEntry(const char* reason) {
                 gpu_line += fmt::format(" {:08x}", gpu_value);
                 cpu_line += gpu_value == cpu_value ? std::string(" ........")
                                                    : fmt::format(" {:08x}", cpu_value);
+                if (has_snapshot && list.submitted_offsets[i] + j < list.submitted_words.size()) {
+                    const u32 snap_value =
+                        list.submitted_words[list.submitted_offsets[i] + j].argument;
+                    snap_differs |= snap_value != gpu_value;
+                    snap_line += snap_value == gpu_value ? std::string(" ........")
+                                                         : fmt::format(" {:08x}", snap_value);
+                }
             }
             LOG_WARNING(HW_GPU, "    +{:03x}:{}", word * 4, gpu_line);
             LOG_WARNING(HW_GPU, "    cpu :{}", cpu_line);
+            if (snap_differs) {
+                LOG_WARNING(HW_GPU, "    snap:{}", snap_line);
+            }
         }
     }
 }
