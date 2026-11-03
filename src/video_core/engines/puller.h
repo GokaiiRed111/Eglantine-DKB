@@ -44,6 +44,10 @@ class RasterizerInterface;
 
 namespace Tegra::Engines {
 
+/// Diagnostics: notes a semaphore operation (channel or source, operation, address, value, device
+/// address) for the history printed when a channel waits on a semaphore for long.
+void Nx2RecordSemaphore(u32 channel, u32 op, GPUVAddr address, u32 value, u64 device);
+
 class Puller final {
 public:
     struct MethodCall {

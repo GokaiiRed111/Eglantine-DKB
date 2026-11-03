@@ -59,7 +59,41 @@ void DrainBack() {
     VideoCommon::GpuSplit::Get().Drain();
 }
 
+// Diagnostics (Bananza's freeze, channels waiting on each other): the last semaphore operations
+// of every channel, printed when a channel waits for more than 2 s.
+struct SemaphoreRecord {
+    u32 channel;
+    u32 op;
+    GPUVAddr address;
+    u32 value;
+    u64 device;
+};
+std::array<SemaphoreRecord, 256> g_semaphore_history{};
+std::atomic<u64> g_semaphore_count{};
+
+void PrintSemaphoreHistory(u64 device) {
+    const u64 count = g_semaphore_count.load(std::memory_order_relaxed);
+    const u64 shown = (std::min<u64>)(count, g_semaphore_history.size());
+    u32 printed = 0;
+    for (u64 i = count - shown; i < count; ++i) {
+        const auto& record = g_semaphore_history[i % g_semaphore_history.size()];
+        // Every operation on the waited page, and the last 32 of all.
+        if ((record.device >> 12) == (device >> 12) || i + 32 >= count) {
+            LOG_WARNING(HW_GPU, "  semaphore -{}: channel {} op {} {:#x} (device {:#x}) value {:#x}",
+                        count - 1 - i, record.channel, record.op, record.address, record.device,
+                        record.value);
+            ++printed;
+        }
+    }
+    LOG_WARNING(HW_GPU, "  ({} of the last {} semaphore operations shown)", printed, shown);
+}
+
 } // Anonymous namespace
+
+void Nx2RecordSemaphore(u32 channel, u32 op, GPUVAddr address, u32 value, u64 device) {
+    const u64 index = g_semaphore_count.fetch_add(1, std::memory_order_relaxed);
+    g_semaphore_history[index % g_semaphore_history.size()] = {channel, op, address, value, device};
+}
 
 bool Puller::PendingAcquire::Matches(u32 current) const {
     switch (static_cast<GpuSemaphoreOperation>(operation)) {
@@ -107,6 +141,11 @@ bool Puller::CanResumeAcquire(DmaPusher& dma_pusher) {
                     dma_pusher.memory_manager.Read<u32>((pending_acquire->address & ~GPUVAddr{0xf}) + 4),
                     dma_pusher.memory_manager.Read<u32>((pending_acquire->address & ~GPUVAddr{0xf}) + 8),
                     dma_pusher.memory_manager.Read<u32>((pending_acquire->address & ~GPUVAddr{0xf}) + 12));
+        static std::atomic<u32> histories{};
+        if (histories.fetch_add(1) < 2) {
+            PrintSemaphoreHistory(device.value_or(0));
+            dma_pusher.DumpCurrentEntry("semaphore wait");
+        }
     }
     return false;
 }
@@ -210,6 +249,10 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
                  regs.semaphore_address.SemaphoreAddress(), regs.semaphore_sequence,
                  dma_pusher.memory_manager.Read<u32>(regs.semaphore_address.SemaphoreAddress()));
     }
+    Nx2RecordSemaphore(dma_pusher.channel_state.bind_id, static_cast<u32>(op),
+                    regs.semaphore_address.SemaphoreAddress(), regs.semaphore_sequence,
+                    dma_pusher.memory_manager.GpuToCpuAddress(regs.semaphore_address.SemaphoreAddress())
+                        .value_or(0));
     if (op == GpuSemaphoreOperation::WriteLong) {
         const GPUVAddr sequence_address{regs.semaphore_address.SemaphoreAddress()};
         const u32 payload = regs.semaphore_sequence;

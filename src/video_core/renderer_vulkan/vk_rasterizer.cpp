@@ -30,6 +30,7 @@
 #include "video_core/control/channel_state.h"
 #include "video_core/native_query_trace.h"
 #include "video_core/engines/maxwell_3d.h"
+#include "video_core/engines/puller.h"
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
@@ -1131,6 +1132,11 @@ void RasterizerVulkan::ResetCounter(VideoCommon::QueryType type) {
 
 void RasterizerVulkan::Query(GPUVAddr gpu_addr, VideoCommon::QueryType type,
                              VideoCommon::QueryPropertiesFlags flags, u32 payload, u32 subreport) {
+    if (type == VideoCommon::QueryType::Payload) {
+        // Diagnostics: semaphore releases as the back writes them (source 100: the query cache).
+        Tegra::Engines::Nx2RecordSemaphore(100, 0, gpu_addr, payload,
+                                           gpu_memory->GpuToCpuAddress(gpu_addr).value_or(0));
+    }
     query_cache.CounterReport(gpu_addr, type, flags, payload, subreport);
 }
 
