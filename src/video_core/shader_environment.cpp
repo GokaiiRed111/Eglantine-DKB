@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <thread>
@@ -437,6 +438,22 @@ std::shared_ptr<const LoweredNativeCode> GenericEnvironment::LowerNativeCode(u32
     }
     auto lowered = Shader::Ampere::LowerToMaxwell(
         native, {.geometry = geometry, .native_code_address = program_base + native_header_size});
+    if (geometry) {
+        // The first few geometry programs with their native code, to check the lowering offline.
+        static std::atomic<u32> geometry_logs{};
+        if (geometry_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+            LOG_INFO(Shader, "Native geometry program at {:#x}: {} instructions, {}", program_base,
+                     native.size(), lowered ? std::string_view{"lowered"} : lowered.error);
+            for (size_t first = 0; first < native.size(); first += 4) {
+                std::string line;
+                for (size_t i = first; i < (std::min)(first + 4, native.size()); ++i) {
+                    line += fmt::format(" {:08x} {:08x} {:08x} {:08x}", native[i].words[0],
+                                        native[i].words[1], native[i].words[2], native[i].words[3]);
+                }
+                LOG_INFO(Shader, "  {:04x}:{}", first * sizeof(Instruction), line);
+            }
+        }
+    }
     // EDEN_NX2_REJECT=<hex address>,...: treat these programs as rejected (to find which newly
     // lowered program changes a game's behaviour without rebuilding).
     if (static const std::string reject_list = [] {
@@ -553,8 +570,13 @@ GraphicsEnvironment::GraphicsEnvironment(Tegra::Engines::Maxwell3D& maxwell3d_,
     texture_bound = maxwell3d->regs.bindless_texture_const_buffer_slot;
     const auto& regs{maxwell3d->regs};
     const bool native{maxwell3d->GetNativeMacroEngine().native_turing};
-    const bool geometry{native && program == Maxwell::ShaderType::Geometry &&
-                        std::getenv("EDEN_NX2_EXPERIMENTAL_GEOMETRY")};
+    // Native geometry programs: Donkey Kong Bananza's terrain counts its triangles into the
+    // indirect draw records from one. EDEN_NX2_EXPERIMENTAL_GEOMETRY=0 rejects them again.
+    static const bool native_geometry = [] {
+        const char* value = std::getenv("EDEN_NX2_EXPERIMENTAL_GEOMETRY");
+        return value == nullptr || value[0] != '0';
+    }();
+    const bool geometry{native && program == Maxwell::ShaderType::Geometry && native_geometry};
     // Task and mesh programs: the task in the vertex slot, its mesh program in the tessellation
     // slot (without a task, the mesh program is in the vertex slot).
     const bool mesh_slot{native && regs.IsMeshEnabled() &&

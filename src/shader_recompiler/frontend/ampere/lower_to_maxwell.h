@@ -2859,6 +2859,18 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
                 native_predicate != 7)
                 return fail(index, "native geometry exit setup mode");
             break;
+        case 0x324: case 0x924: { // OUT: emit and/or cut, stream in a register or an immediate.
+            // Ampere: handle 24-31, stream register 32-39 or immediate word 1, emit/cut 78-79.
+            // Maxwell: handle 8-15, stream 20, emit 39, cut 40 (as PokeDinner's 34f0511fd).
+            const u32 out_type = insn.Bits(78, 2);
+            if (!options.geometry || out_type == 0 || (insn.words[2] & ~0xc000U) ||
+                (opcode == 0x924 && insn.words[1] > 0x7ffff))
+                return fail(index, "native geometry output mode");
+            const u64 stream = opcode == 0x324 ? u64{insn.Bits(32, 8)} : u64{insn.words[1]};
+            emit(base(opcode == 0x324 ? 0xfbe0000000000000ULL : 0xf6e0000000000000ULL) |
+                 (u64{insn.Bits(24, 8)} << 8) | (stream << 20) | (u64{out_type} << 39));
+            break;
+        }
         case 0x923: case 0x927: { // ISBERD / ISBEWR: task and mesh programs' stage buffer.
             // Ampere: Ra 24-31, offset 40-63, ISBERD dest 16-23, ISBEWR data 32-39; 75 = .32 (else
             // U8), 76-77 = 3 .ATTR (0 the map region), 78 = .SKEW, 79 = .O (the output buffer).
