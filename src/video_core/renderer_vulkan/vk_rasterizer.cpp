@@ -322,8 +322,10 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
         const auto& reset_regs = maxwell3d->regs;
         const GPUVAddr program =
             (u64{reset_regs.pipelines[1].reserved[0] & 0xff} << 32) | reset_regs.pipelines[1].reserved[1];
-        static std::unordered_map<GPUVAddr, bool> reset_programs;
-        auto [entry, inserted] = reset_programs.try_emplace(program, false);
+        // Known by the vertex program's hash, not its address: a different program loaded where
+        // a checked one was is checked again.
+        static std::unordered_map<u64, bool> reset_programs;
+        auto [entry, inserted] = reset_programs.try_emplace(pipeline->UniqueHash(1), false);
         if (inserted) {
             std::array<u32, 44> code{};
             const GPUVAddr code_address = program + 128;
@@ -349,24 +351,71 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                     gpu_memory->FlushRegion(list_begin, list_bytes,
                                             VideoCommon::CacheType::BufferCache);
                 }
-                std::vector<u64> pointers(count);
+                static std::vector<u64> pointers;
+                pointers.resize(count);
                 gpu_memory->ReadBlockUnsafe(list_begin, pointers.data(), list_bytes);
                 static constexpr std::array<u32, 5> record{0, 1, 0, 0, 0};
+                constexpr size_t record_size = sizeof(record);
                 const std::span<const u8> bytes{reinterpret_cast<const u8*>(record.data()),
-                                                sizeof(record)};
-                u32 written = 0;
+                                                record_size};
+                // Each write updates the caches and uploads to the GPU, which for one 20-byte
+                // record at a time costs more than the draw itself: write the records next to
+                // each other at once. Records that overlap keep the program's order instead.
+                static std::vector<u64> records;
+                records.clear();
                 for (const u64 pointer : pointers) {
-                    if (pointer == 0 || !gpu_memory->IsFullyMappedRange(pointer, sizeof(record))) {
-                        continue;
+                    if (pointer != 0 && gpu_memory->IsFullyMappedRange(pointer, record_size)) {
+                        records.push_back(pointer);
                     }
-                    AccelerateInlineToMemory(pointer, sizeof(record), bytes);
-                    ++written;
+                }
+                std::ranges::sort(records);
+                records.erase(std::unique(records.begin(), records.end()), records.end());
+                const bool overlapping =
+                    std::ranges::adjacent_find(records, [](u64 left, u64 right) {
+                        return right - left < sizeof(record);
+                    }) != records.end();
+                size_t runs = 0;
+                if (overlapping) {
+                    for (const u64 pointer : pointers) {
+                        if (pointer != 0 && gpu_memory->IsFullyMappedRange(pointer, record_size)) {
+                            AccelerateInlineToMemory(pointer, record_size, bytes);
+                            ++runs;
+                        }
+                    }
+                } else {
+                    static std::vector<u8> pattern;
+                    for (size_t first = 0; first < records.size();) {
+                        size_t last = first + 1;
+                        while (last < records.size() &&
+                               records[last] == records[last - 1] + record_size) {
+                            ++last;
+                        }
+                        const GPUVAddr run_begin = records[first];
+                        const size_t run_size = (last - first) * record_size;
+                        if (pattern.size() < run_size) {
+                            pattern.resize(run_size);
+                            for (size_t i = 0; i < pattern.size(); ++i) {
+                                pattern[i] = bytes[i % record_size];
+                            }
+                        }
+                        // One write per range that is contiguous in device memory too.
+                        for (const auto& [segment, segment_size] :
+                             gpu_memory->GetSubmappedRange(run_begin, run_size)) {
+                            AccelerateInlineToMemory(
+                                segment, segment_size,
+                                std::span<const u8>{pattern.data() + (segment - run_begin),
+                                                    segment_size});
+                        }
+                        ++runs;
+                        first = last;
+                    }
                 }
                 static u32 reset_logs{};
                 if (reset_logs < 5) {
                     ++reset_logs;
-                    LOG_INFO(HW_GPU, "Indirect draw reset: list {:#x}, {} records ({} written)",
-                             list_begin, count, written);
+                    LOG_INFO(HW_GPU,
+                             "Indirect draw reset: list {:#x}, {} records ({} written in {} writes)",
+                             list_begin, count, records.size(), runs);
                 }
             }
             submitted = true;
