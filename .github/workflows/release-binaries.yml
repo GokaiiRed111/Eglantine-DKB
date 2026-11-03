@@ -567,6 +567,14 @@ jobs:
           # Asset names drop the commit sha: the release tag already identifies the build, and
           # stable names let the notes table link to them.
           strip_sha() { sed "s/-${GITHUB_SHA}//" <<< "$1"; }
+          # A single artifact is extracted straight into artifacts/ (this branch builds only the
+          # Windows PGO package): give it its own folder like the others.
+          if [ -n "$(find artifacts -maxdepth 1 -type f -print -quit)" ]; then
+            single="eglantine-windows-x86_64-pgo-${GITHUB_SHA}"
+            mkdir "$single"
+            mv artifacts/* "$single"/
+            mv "$single" artifacts/
+          fi
           for artifact in artifacts/*/; do
             name=$(basename "$artifact")
             if compgen -G "$artifact*.AppImage" > /dev/null; then
