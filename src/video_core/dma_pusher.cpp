@@ -103,6 +103,8 @@ bool DmaPusher::Step() {
     }
 
     if (header.size > 0) {
+        // EDEN_NX2_PBFLUSH=1 flushed this entry's words: read them from guest memory.
+        bool parameters_flushed = false;
         if (subchannels[dma_state.subchannel] && dma_state.method_count) {
             const auto engine = subchannel_type[dma_state.subchannel];
             const bool kepler_payload = engine == Engines::EngineTypes::KeplerCompute && dma_state.method == ComputeInline && dma_state.non_incrementing;
@@ -110,7 +112,42 @@ bool DmaPusher::Step() {
             if (kepler_payload || macro_payload) {
                 const size_t words = std::min<size_t>(dma_state.method_count, header.size);
                 auto* const engine_state = subchannels[dma_state.subchannel];
-                if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
+                // Parameters continued in an entry of their own can be arguments the GPU wrote
+                // (Donkey Kong Bananza's terrain counts each mesh's triangles into a 5-word
+                // indirect draw record and draws with it). The entry read below takes words on
+                // GPU-written pages from the GPU (ReadGpuWrittenCommands). EDEN_NX2_PBFLUSH=1
+                // (diagnostics, slow) also drains the split and flushes every such block first,
+                // as PokeDinner's 5a9573121 does, and logs the ones the GPU-written pages missed.
+                static const bool flush_parameters = [] {
+                    const char* value = std::getenv("EDEN_NX2_PBFLUSH");
+                    return value != nullptr && value[0] == '1';
+                }();
+                if (flush_parameters && words <= 64) {
+                    if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
+                        split.Drain();
+                    }
+                    const GPUVAddr address = dma_state.dma_get;
+                    const size_t bytes = words * sizeof(u32);
+                    if (memory_manager.IsMemoryDirty(address, bytes,
+                                                     VideoCommon::CacheType::BufferCache)) {
+                        const bool known = IsGpuWrittenCommands(address, bytes);
+                        memory_manager.FlushRegion(address, bytes,
+                                                   VideoCommon::CacheType::BufferCache);
+                        parameters_flushed = true;
+                        static std::atomic<u32> flush_logs{};
+                        if (flush_logs.fetch_add(1) < 20) {
+                            LOG_INFO(HW_GPU,
+                                     "Macro parameters at {:#x} ({} words) were written by the GPU: "
+                                     "flushed ({})",
+                                     address, words,
+                                     known ? "on a GPU-written page"
+                                           : "missed by the GPU-written pages");
+                        }
+                    }
+                }
+                if (parameters_flushed) {
+                    engine_state->current_dirty = false;
+                } else if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
                     // The caches behind IsMemoryDirty belong to the split's back thread.
                     split.Defer([engine_state, memory = &memory_manager, address = GPUVAddr{dma_state.dma_get},
                                  bytes = words * sizeof(u32)] {
@@ -160,7 +197,7 @@ bool DmaPusher::Step() {
         // safe read below would flush (with the split, the front can't tell: it reads memory
         // unflushed anyway). Entries on pages the GPU writes (culling) always take the flushing
         // read: their words at submit time are an older frame's.
-        const bool submitted = command_resume_offset == 0 &&
+        const bool submitted = command_resume_offset == 0 && !parameters_flushed &&
                                dma_pushbuffer_subindex < command_list.submitted_offsets.size() &&
                                (command_list.snapshot_suspensions & 1) == 0 &&
                                command_list.snapshot_suspensions ==
