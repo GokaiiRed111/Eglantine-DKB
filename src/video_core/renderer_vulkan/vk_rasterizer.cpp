@@ -422,6 +422,12 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
             return;
         }
     }
+    // Storage writes of draws with a geometry program to command list pages are synced by the
+    // count of such draws the split's front sent (BufferCache::Nx2ListPage::geometry_written).
+    buffer_cache.Nx2SetGeometryDraw(pipeline->UniqueHash(4) != 0);
+    SCOPE_EXIT {
+        buffer_cache.Nx2SetGeometryDraw(false);
+    };
     // update engine as channel may be different.
     pipeline->SetEngine(maxwell3d, gpu_memory);
     const u32 repack_dirty = buffer_cache_runtime.SetVertexRepackLayout(
@@ -1160,6 +1166,11 @@ VideoCore::RasterizerInterface::GpuWrittenList RasterizerVulkan::ReadGpuWrittenC
 
 void RasterizerVulkan::NoteGpuWrittenCommandListSynced(DAddr page) {
     buffer_cache.Nx2NoteListSynced(page);
+}
+
+void RasterizerVulkan::FlushGpuWrittenListPages() {
+    std::scoped_lock lock{buffer_cache.mutex};
+    buffer_cache.Nx2FlushGeometryListPages();
 }
 
 void RasterizerVulkan::FlushRegion(DAddr addr, u64 size, VideoCommon::CacheType which) {
