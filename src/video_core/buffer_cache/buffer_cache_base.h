@@ -435,7 +435,11 @@ public:
                 return;
             }
         }
-        set.Add(device_addr, size);
+        // Writes elsewhere remove ranges often enough that the table above misses most repeats;
+        // a lookup is still far cheaper than an insertion that merges nothing new.
+        if (!set.Contains(device_addr, size)) {
+            set.Add(device_addr, size);
+        }
         recent[next++ % recent.size()] = {device_addr, size, removals};
     }
 

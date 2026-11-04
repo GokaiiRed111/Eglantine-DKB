@@ -32,6 +32,9 @@ public:
         return m_removals;
     }
 
+    /// Whether one range covers all of [base_address, base_address + size): one lookup.
+    bool Contains(AddressType base_address, size_t size) const;
+
     /// Whether any range overlaps [base_address, base_address + size): one lookup.
     bool Intersects(AddressType base_address, size_t size) const;
 
