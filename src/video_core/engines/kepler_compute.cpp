@@ -635,7 +635,7 @@ void KeplerCompute::RememberDlssMotionVectors() {
 // images of the same format and the output is larger: title 4's slots first, then Fortune's
 // Weave's, else the first two handles in cbuf0+0x80..0x11c that form such a pair.
 // Every image handle in the program's bound constant buffers (the first 8 KiB of each): the pair
-// upscale_pair accepts with the largest output, cached by program (the handles' places) and
+// upscale_pair accepts with the largest output (and input), cached by program (the handles' places) and
 // looked for again only every 60 dispatches while none is found. Donkey Kong Bananza's opening
 // upscaler keeps no handles where the slots above look.
 std::optional<std::pair<Texture::TICEntry, Texture::TICEntry>> KeplerCompute::FindUpscalePair(
@@ -702,14 +702,18 @@ std::optional<std::pair<Texture::TICEntry, Texture::TICEntry>> KeplerCompute::Fi
             if (!seen) candidates.push_back({{slot, index * 4}, tic});
         }
     }
+    // The largest output, then the largest input for it: Bananza's upscaler also holds a half
+    // resolution image of the same format (960x540 beside its 1280x720 input; blitted, the
+    // opening showed a white sky over grey ground).
     std::optional<std::pair<Place, Place>> best;
-    u64 best_area = 0;
+    std::pair<u64, u64> best_areas{};
     for (const Candidate& from : candidates) {
         for (const Candidate& to : candidates) {
             if (!upscale_pair(from.tic, to.tic)) continue;
-            const u64 area = u64{to.tic.Width()} * to.tic.Height();
-            if (area > best_area) {
-                best_area = area;
+            const std::pair<u64, u64> areas{u64{to.tic.Width()} * to.tic.Height(),
+                                            u64{from.tic.Width()} * from.tic.Height()};
+            if (areas > best_areas) {
+                best_areas = areas;
                 best = std::make_pair(from.place, to.place);
             }
         }
