@@ -598,7 +598,9 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         const auto arch = GetNvidiaArch();
         if (arch >= NvidiaArchitecture::Arch_AmpereOrNewer) {
             LOG_WARNING(Render_Vulkan, "Ampere and newer have broken float16 math");
-            features.shader_float16_int8.shaderFloat16 = false;
+            // Stays enabled on the device: the LSFG frame generation shaders cannot be created
+            // without it (from ZendNevs's fork). Game and filter shaders still avoid it.
+            has_broken_float16_math = true;
         }
 
         // Use hardware depth/stencil blits instead when available

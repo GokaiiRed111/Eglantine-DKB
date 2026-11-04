@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+
 #include "common/settings.h"
 #include "common/thread.h"
 #include "core/frontend/emu_window.h"
@@ -201,7 +203,10 @@ void PresentManager::Present(Frame* frame) {
 }
 
 size_t PresentManager::MaxExtraFrames() const {
-    return image_count - 1;
+    // The pool is sized once at boot; turning frame generation on later can't go past what it
+    // holds, and asking for more than it holds would wait for a free frame forever (from
+    // ZendNevs's fork).
+    return std::min<size_t>(image_count, frames.size()) - 1;
 }
 
 bool PresentManager::NeedsStorage(const Frame* frame, bool required) const {

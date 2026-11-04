@@ -1197,6 +1197,16 @@ void MainWindow::InitializeWidgets() {
             });
     statusBar()->insertPermanentWidget(0, gpu_accuracy_button);
 
+    // Frame generation on and off during a game (from ZendNevs's Eglantine fork).
+    frame_gen_button = new QPushButton();
+    frame_gen_button->setObjectName(QStringLiteral("TogglableStatusBarButton"));
+    frame_gen_button->setCheckable(true);
+    frame_gen_button->setFocusPolicy(Qt::NoFocus);
+    frame_gen_button->setToolTip(tr("Turn frame generation on or off, even during a game"));
+    connect(frame_gen_button, &QPushButton::clicked, this, &MainWindow::OnToggleFrameGen);
+    UpdateFrameGenButton();
+    statusBar()->insertPermanentWidget(0, frame_gen_button);
+
     // Setup Renderer API button
     renderer_status_button = new QPushButton();
     renderer_status_button->setObjectName(QStringLiteral("RendererStatusBarButton"));
@@ -1342,6 +1352,7 @@ void MainWindow::InitializeHotkeys() {
     connect_shortcut(QStringLiteral("Change Adapting Filter"), &MainWindow::OnToggleAdaptingFilter);
     connect_shortcut(QStringLiteral("Change Docked Mode"), &MainWindow::OnToggleDockedMode);
     connect_shortcut(QStringLiteral("Change GPU Mode"), &MainWindow::OnToggleGpuAccuracy);
+    connect_shortcut(QStringLiteral("Toggle Frame Generation"), &MainWindow::OnToggleFrameGen);
     connect_shortcut(QStringLiteral("Audio Mute/Unmute"), &MainWindow::OnMute);
     connect_shortcut(QStringLiteral("Audio Volume Down"), &MainWindow::OnDecreaseVolume);
     connect_shortcut(QStringLiteral("Audio Volume Up"), &MainWindow::OnIncreaseVolume);
@@ -3782,6 +3793,18 @@ void MainWindow::OnToggleGpuAccuracy() {
     UpdateGPUAccuracyButton();
 }
 
+void MainWindow::OnToggleFrameGen() {
+    // The renderer and the swapchain read it every frame.
+    Settings::values.frame_gen.SetValue(!Settings::values.frame_gen.GetValue());
+    UpdateFrameGenButton();
+}
+
+void MainWindow::UpdateFrameGenButton() {
+    const bool on = Settings::values.frame_gen.GetValue();
+    frame_gen_button->setText(on ? tr("FG ON") : tr("FG OFF"));
+    frame_gen_button->setChecked(on);
+}
+
 void MainWindow::OnMute() {
     Settings::values.audio_muted = !Settings::values.audio_muted;
     UpdateVolumeUI();
@@ -4577,6 +4600,7 @@ void MainWindow::UpdateVolumeUI() {
 }
 
 void MainWindow::UpdateStatusButtons() {
+    UpdateFrameGenButton();
     renderer_status_button->setChecked(Settings::values.renderer_backend.GetValue() ==
                                        Settings::RendererBackend::Vulkan);
     UpdateAPIText();

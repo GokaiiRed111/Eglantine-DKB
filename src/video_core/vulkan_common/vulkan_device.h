@@ -469,6 +469,11 @@ FN_MAX_LIMIT_LIST
 
     /// Returns true if the device supports float16 natively.
     bool IsFloat16Supported() const {
+        return features.shader_float16_int8.shaderFloat16 && !has_broken_float16_math;
+    }
+
+    /// Returns true if float16 shaders can run at all, even where game shaders must avoid them.
+    bool IsFloat16Enabled() const {
         return features.shader_float16_int8.shaderFloat16;
     }
 
@@ -1301,6 +1306,7 @@ private:
     bool is_non_gpu{};                         ///< Is SoftwareRasterizer, FPGA, non-GPU device.
     bool has_broken_compute{};                 ///< Compute shaders can cause crashes
     bool has_broken_cube_compatibility{};      ///< Has broken cube compatibility bit
+    bool has_broken_float16_math{};            ///< Game and filter shaders must avoid float16
     bool has_broken_descriptor_aliasing{};     ///< Miscompiles descriptors aliased on one binding
     bool has_broken_parallel_compiling{};      ///< Has broken parallel shader compiling.
     bool has_renderdoc{};                      ///< Has RenderDoc attached
