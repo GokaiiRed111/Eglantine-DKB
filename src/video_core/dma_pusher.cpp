@@ -218,7 +218,8 @@ bool DmaPusher::Step() {
         const bool behind_suspension =
             (command_list.snapshot_suspensions & 1) != 0 ||
             command_list.snapshot_suspensions != suspensions.load(std::memory_order_acquire);
-        if (has_snapshot && behind_suspension) {
+        static const bool check_suspended = std::getenv("EDEN_NX2_PB_CHECK") != nullptr;
+        if (check_suspended && has_snapshot && behind_suspension) {
             NoteSuspendedSnapshot(header, command_list.submitted_words.data() +
                                               command_list.submitted_offsets[dma_pushbuffer_subindex],
                                   snapshot_behind_suspensions);
@@ -422,10 +423,9 @@ static const u32 g_semaphore_watch = [] {
 }();
 
 // EDEN_NX2_PB_CHECK also keeps the last parsed entries, for DumpCurrentEntry.
-// Diagnostics build (Bananza's freeze): on unless EDEN_NX2_PB_CHECK=0.
 static const bool g_record_parsed_entries = [] {
     const char* value = std::getenv("EDEN_NX2_PB_CHECK");
-    return value == nullptr || value[0] != '0';
+    return value != nullptr && value[0] != '0';
 }();
 
 void DmaPusher::WatchArgument(u32 method, u32 argument) const {
@@ -562,8 +562,8 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
 
 void DmaPusher::NoteSuspendedSnapshot(const CommandListHeader& header,
                                       const CommandHeader* snapshot, bool runs_snapshot) {
-    // Diagnostics: how often memory no longer holds what was submitted for an entry queued
-    // behind a suspension, and where the two first differ.
+    // Diagnostics (EDEN_NX2_PB_CHECK): how often memory no longer holds what was submitted for an
+    // entry queued behind a suspension, and where the two first differ.
     static std::atomic<u64> checked{};
     static std::atomic<u64> differed{};
     const u64 check = checked.fetch_add(1, std::memory_order_relaxed) + 1;
