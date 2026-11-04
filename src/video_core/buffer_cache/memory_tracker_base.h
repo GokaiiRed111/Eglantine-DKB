@@ -70,6 +70,28 @@ public:
         });
     }
 
+    /// A value that stays the same while no page of the region becomes CPU modified, or ~0 when
+    /// part of it is not tracked yet (the sum of its 4 MiB regions' epochs, which only grow).
+    [[nodiscard]] u64 CpuWriteEpoch(VAddr cpu_addr, u64 size) const noexcept {
+        if (size == 0) {
+            return 0;
+        }
+        const u64 first = cpu_addr >> HIGHER_PAGE_BITS;
+        const u64 last = (cpu_addr + size - 1) >> HIGHER_PAGE_BITS;
+        if (last >= NUM_HIGH_PAGES) {
+            return ~u64{0};
+        }
+        u64 sum = 0;
+        for (u64 page = first; page <= last; ++page) {
+            const Manager* const manager = top_tier[page];
+            if (manager == nullptr) {
+                return ~u64{0};
+            }
+            sum += manager->cpu_epoch;
+        }
+        return sum;
+    }
+
     /// Mark region as CPU modified, notifying the device_tracker about this change
     void MarkRegionAsCpuModified(VAddr dirty_cpu_addr, u64 query_size) {
         IteratePages<true>(dirty_cpu_addr, query_size, [](Manager* manager, u64 offset, size_t size) {

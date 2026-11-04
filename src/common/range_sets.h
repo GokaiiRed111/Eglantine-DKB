@@ -26,6 +26,12 @@ public:
     void Clear();
     bool Empty() const;
 
+    /// Counts the calls that can remove ranges (Subtract, Clear, being moved from): while it is
+    /// unchanged, ranges added before are still in the set.
+    u64 Removals() const {
+        return m_removals;
+    }
+
     /// Whether any range overlaps [base_address, base_address + size): one lookup.
     bool Intersects(AddressType base_address, size_t size) const;
 
@@ -38,6 +44,7 @@ public:
 private:
     struct RangeSetImpl;
     std::unique_ptr<RangeSetImpl> m_impl;
+    u64 m_removals{};
 };
 
 template <typename AddressType>

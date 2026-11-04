@@ -447,6 +447,49 @@ public:
     /// Indirectly read banks of native programs already uploaded this frame.
     std::unordered_set<DAddr> native_indirect_uniforms_this_frame;
 
+    /// EDEN_NX2_DRAW_TUNING=0 turns off the two per-draw shortcuts below.
+    static bool Nx2DrawTuning() {
+        static const bool enabled = [] {
+            const char* value = std::getenv("EDEN_NX2_DRAW_TUNING");
+            return value == nullptr || value[0] != '0';
+        }();
+        return enabled;
+    }
+    /// Each vertex buffer slot as last synchronized: skipped while none of its pages became CPU
+    /// modified since (MemoryTrackerBase::CpuWriteEpoch).
+    struct Nx2SyncedVertexBuffer {
+        BufferId buffer_id{};
+        DAddr device_addr{};
+        u32 size{};
+        u64 epoch{~u64{0}};
+    };
+    std::array<Nx2SyncedVertexBuffer, NUM_VERTEX_BUFFERS> nx2_synced_vertex_buffers{};
+    /// Ranges recently added to a range set: adding one again before the set lost any range is a
+    /// no-op (Bananza's culling draws mark the same storage ranges written draw after draw).
+    struct Nx2RecentRange {
+        DAddr device_addr{};
+        u64 size{};
+        u64 removals{~u64{0}};
+    };
+    std::array<Nx2RecentRange, 8> nx2_recent_gpu_ranges{};
+    size_t nx2_recent_gpu_next{};
+    void Nx2AddRangeOnce(Common::RangeSet<DAddr>& set, std::array<Nx2RecentRange, 8>& recent,
+                         size_t& next, DAddr device_addr, u64 size) {
+        if (!Nx2DrawTuning()) {
+            set.Add(device_addr, size);
+            return;
+        }
+        const u64 removals = set.Removals();
+        for (const Nx2RecentRange& range : recent) {
+            if (range.device_addr == device_addr && range.size == size &&
+                range.removals == removals) {
+                return;
+            }
+        }
+        set.Add(device_addr, size);
+        recent[next++ % recent.size()] = {device_addr, size, removals};
+    }
+
 private:
     template <typename Mask, typename Func>
     static void ForEachEnabledBit(Mask enabled_mask, Func&& func) {
