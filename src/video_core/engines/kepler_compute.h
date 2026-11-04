@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -268,6 +269,9 @@ private:
     void DescribeNativeResources(const NativeQmdScheduler::Descriptor& qmd);
     void RememberDlssMotionVectors();
     bool UpscaleInsteadOfNativeProgram();
+    std::optional<std::pair<Texture::TICEntry, Texture::TICEntry>> FindUpscalePair(
+        const std::function<bool(const std::optional<Texture::TICEntry>&,
+                                 const std::optional<Texture::TICEntry>&)>& upscale_pair);
 
     /// Motion vectors and depth of Fire Emblem: Fortune's Weave's DLSS evaluation, from its first
     /// pass (run earlier in the frame than the network pass the stand-in replaces), with the input

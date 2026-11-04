@@ -634,6 +634,109 @@ void KeplerCompute::RememberDlssMotionVectors() {
 // 720p to 1440p docked). Blit one to the other with bilinear filtering when both are plain 2D
 // images of the same format and the output is larger: title 4's slots first, then Fortune's
 // Weave's, else the first two handles in cbuf0+0x80..0x11c that form such a pair.
+// Every image handle in the program's bound constant buffers (the first 8 KiB of each): the pair
+// upscale_pair accepts with the largest output, cached by program (the handles' places) and
+// looked for again only every 60 dispatches while none is found. Donkey Kong Bananza's opening
+// upscaler keeps no handles where the slots above look.
+std::optional<std::pair<Texture::TICEntry, Texture::TICEntry>> KeplerCompute::FindUpscalePair(
+    const std::function<bool(const std::optional<Texture::TICEntry>&,
+                             const std::optional<Texture::TICEntry>&)>& upscale_pair) {
+    struct Place {
+        u32 slot;
+        u32 offset;
+    };
+    struct Known {
+        std::optional<std::pair<Place, Place>> pair;
+        u32 since_search{};
+        u32 dispatches{};
+        u32 found{};
+    };
+    static std::unordered_map<GPUVAddr, Known> known;
+    const GPUVAddr program = regs.code_loc.Address();
+    Known& entry = known[program];
+    ++entry.dispatches;
+    const auto read_place = [&](const Place& place) -> std::optional<Texture::TICEntry> {
+        const auto& cbuf = launch_description.const_buffer_config[place.slot];
+        const GPUVAddr address = (GPUVAddr{cbuf.address_high} << 32) | cbuf.address_low;
+        const u32 handle = memory_manager.Read<u32>(address + place.offset);
+        const u32 tic_index = handle & 0xfffff;
+        if (handle == 0 || tic_index > regs.tic.limit) return std::nullopt;
+        return GetTICEntry(tic_index);
+    };
+    if (entry.pair) {
+        const auto from = read_place(entry.pair->first);
+        const auto to = read_place(entry.pair->second);
+        if (upscale_pair(from, to)) {
+            ++entry.found;
+            return std::make_pair(*from, *to);
+        }
+        entry.pair.reset();
+        entry.since_search = 0;
+    } else if (entry.since_search++ % 60 != 0) {
+        return std::nullopt;
+    }
+    struct Candidate {
+        Place place;
+        Texture::TICEntry tic;
+    };
+    std::vector<Candidate> candidates;
+    std::vector<u32> words;
+    for (u32 slot = 0; slot < NumConstBuffers; ++slot) {
+        if (((launch_description.const_buffer_enable_mask.Value() >> slot) & 1) == 0) continue;
+        const auto& cbuf = launch_description.const_buffer_config[slot];
+        const GPUVAddr address = (GPUVAddr{cbuf.address_high} << 32) | cbuf.address_low;
+        const u32 size = (std::min<u32>)(cbuf.size.Value(), 0x2000);
+        if (address == 0 || size < 4) continue;
+        words.resize(size / 4);
+        memory_manager.ReadBlockUnsafe(address, words.data(), words.size() * sizeof(u32));
+        for (u32 index = 0; index < words.size(); ++index) {
+            const u32 tic_index = words[index] & 0xfffff;
+            if (words[index] == 0 || tic_index > regs.tic.limit) continue;
+            const auto tic = GetTICEntry(tic_index);
+            if (tic.Address() == 0 || tic.Width() < 64 || tic.Height() < 64 || !tic.IsBlockLinear())
+                continue;
+            const bool seen = std::ranges::any_of(candidates, [&](const Candidate& candidate) {
+                return candidate.tic.Address() == tic.Address() &&
+                       candidate.tic.format == tic.format;
+            });
+            if (!seen) candidates.push_back({{slot, index * 4}, tic});
+        }
+    }
+    std::optional<std::pair<Place, Place>> best;
+    u64 best_area = 0;
+    for (const Candidate& from : candidates) {
+        for (const Candidate& to : candidates) {
+            if (!upscale_pair(from.tic, to.tic)) continue;
+            const u64 area = u64{to.tic.Width()} * to.tic.Height();
+            if (area > best_area) {
+                best_area = area;
+                best = std::make_pair(from.place, to.place);
+            }
+        }
+    }
+    static u32 searches_logged{};
+    if (searches_logged < 12) {
+        ++searches_logged;
+        LOG_INFO(HW_GPU, "Upscale fallback search for program {:#x} (dispatch {}): {} images in "
+                         "constant buffers {:#x}, {}",
+                 program, entry.dispatches, candidates.size(),
+                 launch_description.const_buffer_enable_mask.Value(),
+                 best ? "found a pair" : "no pair");
+        for (const Candidate& candidate : candidates) {
+            LOG_INFO(HW_GPU, "  cbuf{}+{:#x}: {:#x} {}x{} format {:#x}", candidate.place.slot,
+                     candidate.place.offset, candidate.tic.Address(), candidate.tic.Width(),
+                     candidate.tic.Height(), static_cast<u32>(candidate.tic.format.Value()));
+        }
+    }
+    if (!best) return std::nullopt;
+    entry.pair = best;
+    const auto from = read_place(best->first);
+    const auto to = read_place(best->second);
+    if (!upscale_pair(from, to)) return std::nullopt;
+    ++entry.found;
+    return std::make_pair(*from, *to);
+}
+
 bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
     const auto& cbuf = launch_description.const_buffer_config[0];
     const GPUVAddr cbuf_address = (GPUVAddr{cbuf.address_high} << 32) | cbuf.address_low;
@@ -642,11 +745,19 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
         if (tic_index > regs.tic.limit) return std::nullopt;
         return GetTICEntry(tic_index);
     };
+    // Same format, both plain 2D images, the output larger, and the same shape within 4% (a
+    // 302x35 strip "upscaled" to 360x202 left Donkey Kong Bananza's opening frames flat purple).
     const auto upscale_pair = [](const std::optional<Texture::TICEntry>& from,
                                  const std::optional<Texture::TICEntry>& to) {
-        return from && to && from->format == to->format && from->Address() != 0 &&
-               to->Address() != 0 && to->Width() > from->Width() && from->IsBlockLinear() &&
-               to->IsBlockLinear();
+        if (!from || !to || from->format != to->format || from->Address() == 0 ||
+            to->Address() == 0 || to->Width() <= from->Width() || !from->IsBlockLinear() ||
+            !to->IsBlockLinear() || from->Height() == 0 || to->Height() == 0) {
+            return false;
+        }
+        const u64 cross_from = u64{from->Width()} * to->Height();
+        const u64 cross_to = u64{to->Width()} * from->Height();
+        const u64 difference = cross_from > cross_to ? cross_from - cross_to : cross_to - cross_from;
+        return difference * 25 <= (std::max)(cross_from, cross_to);
     };
     std::optional<Texture::TICEntry> input = image(0x90), output = image(0xa0);
     bool fortunes_weave = false;
@@ -658,18 +769,10 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
     if (!upscale_pair(input, output)) {
         input.reset();
         output.reset();
-        for (u32 first = 0x80; first < 0x120 && !input; first += 4) {
-            const auto from = memory_manager.Read<u32>(cbuf_address + first) != 0 ? image(first)
-                                                                                    : std::nullopt;
-            for (u32 second = first + 4; from && second < 0x120; second += 4) {
-                if (memory_manager.Read<u32>(cbuf_address + second) == 0) continue;
-                const auto to = image(second);
-                if (upscale_pair(from, to)) {
-                    input = from;
-                    output = to;
-                    break;
-                }
-            }
+        const auto found = FindUpscalePair(upscale_pair);
+        if (found) {
+            input = found->first;
+            output = found->second;
         }
     }
     if (!input || !output)
