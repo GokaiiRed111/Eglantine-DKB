@@ -1818,8 +1818,16 @@ private:
             const char* value = std::getenv("EDEN_NX2_SWAP_INTERVAL");
             return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 0U;
         }();
-        const u32 swap_interval =
-            forced_interval != 0 ? forced_interval : std::clamp<u32>(timing >> 16, 1, 4);
+        // Bananza with dynamic FPS (loader/nso.cpp) times its own frames: holding each frame for
+        // the 2 or 3 vblanks it asked for kept it at 20-30 fps. Pace it to every vblank instead
+        // (from ZendNevs's fork). EDEN_NX2_PACE_ONE=0 keeps the interval it asks for.
+        static const char* const pace_one_env = std::getenv("EDEN_NX2_PACE_ONE");
+        const bool pace_one = system.GetApplicationProcessProgramID() == 0x040074A01BF12000ULL &&
+                              Settings::values.dk_dynamic_fps.GetValue() &&
+                              !(pace_one_env != nullptr && pace_one_env[0] == '0');
+        const u32 swap_interval = forced_interval != 0 ? forced_interval
+                                  : pace_one           ? 1U
+                                                       : std::clamp<u32>(timing >> 16, 1, 4);
         const u32 refresh_rate = (timing & 0xffff) >= 30 && (timing & 0xffff) <= 240 ? timing & 0xffff : 60;
         if (timing != std::exchange(m_swap_word, timing)) {
             LOG_INFO(Service, "nx2:vi2 present #{} swap interval {} at {} Hz (word 12 = {:#x})",

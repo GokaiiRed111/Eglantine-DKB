@@ -272,6 +272,10 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
         Settings, use_reactive_flushing, tr("Enable Reactive Flushing"),
         tr("Uses reactive flushing instead of predictive flushing, allowing more accurate memory "
            "syncing."));
+    INSERT(Settings, dk_dynamic_fps, tr("Donkey Kong Bananza: dynamic FPS (experimental)"),
+           tr("The game times its own frames, so its speed holds when the frame rate drops, and "
+              "it is never held at 20 or 30 fps. It never runs faster than 60.\nTakes effect at "
+              "the next game launch."));
     INSERT(Settings, use_video_framerate, tr("Sync to framerate of video playback"),
            tr("Run the game at normal speed during video playback, even when the framerate is "
               "unlocked."));
