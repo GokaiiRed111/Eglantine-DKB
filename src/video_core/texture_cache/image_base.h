@@ -127,6 +127,10 @@ struct ImageBase {
     VAddr cpu_addr_end = 0;
 
     u64 modification_tick = 0;
+    /// At least the newest modification_tick of the images in aliased_images (raised whenever
+    /// one of theirs is; removing an alias leaves it high): while it is no newer than this
+    /// image's own tick, no alias has data newer than this image (SynchronizeAliases).
+    u64 alias_max_tick = 0;
     size_t lru_index = SIZE_MAX;
 
     std::array<u32, MAX_MIP_LEVELS> mip_level_offsets{};
