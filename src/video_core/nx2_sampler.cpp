@@ -112,8 +112,12 @@ std::string Describe(u64 address, std::unordered_map<u64, std::string>& modules)
 
 void Write(State& state) {
     using namespace Common::FS;
+    // Written beside it and moved over it: a write cut short by the emulator closing left half
+    // a file, without the threads after the first.
     const auto path = GetEdenPath(EdenPath::LogDir) / "nx2_samples.txt";
-    std::FILE* file = _wfopen(path.c_str(), L"w");
+    auto temporary = path;
+    temporary += ".tmp";
+    std::FILE* file = _wfopen(temporary.c_str(), L"w");
     if (file == nullptr) {
         return;
     }
@@ -139,7 +143,9 @@ void Write(State& state) {
             std::fprintf(file, "%s\n", line.c_str());
         }
     }
-    std::fclose(file);
+    if (std::fclose(file) == 0) {
+        MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+    }
 }
 
 void Run(std::stop_token stop_token) {
