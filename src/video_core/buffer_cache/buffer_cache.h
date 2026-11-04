@@ -970,7 +970,17 @@ void BufferCache<P>::BindHostVertexBuffers() {
             const Binding& binding = VertexBufferSlot(index);
             Buffer& buffer = slot_buffers[binding.buffer_id];
             TouchBuffer(buffer, binding.buffer_id);
-            SynchronizeBuffer(buffer, binding.device_addr, binding.size);
+            // Checking every page of a large vertex buffer for CPU writes cost 7% of Bananza's
+            // draw time; none of them became CPU modified since the last check: skip it.
+            Nx2SyncedVertexBuffer& synced = nx2_synced_vertex_buffers[index];
+            const u64 epoch = Nx2DrawTuning()
+                                  ? memory_tracker.CpuWriteEpoch(binding.device_addr, binding.size)
+                                  : ~u64{0};
+            if (epoch == ~u64{0} || synced.epoch != epoch || synced.buffer_id != binding.buffer_id ||
+                synced.device_addr != binding.device_addr || synced.size != binding.size) {
+                SynchronizeBuffer(buffer, binding.device_addr, binding.size);
+                synced = {binding.buffer_id, binding.device_addr, binding.size, epoch};
+            }
             if (!flags[Dirty::VertexBuffer0 + index]) {
                 flush_bindings();
                 continue;
@@ -1717,9 +1727,11 @@ void BufferCache<P>::MarkWrittenBuffer(BufferId buffer_id, DAddr device_addr, u3
     }
     memory_tracker.MarkRegionAsGpuModified(device_addr, size);
     MarkVertexBuffersStale(device_addr, size);
-    gpu_modified_ranges.Add(device_addr, size);
+    Nx2AddRangeOnce(gpu_modified_ranges, nx2_recent_gpu_ranges, nx2_recent_gpu_next, device_addr,
+                    size);
     if (DownloadsAtFence(device_addr, size)) {
-        uncommitted_gpu_modified_ranges.Add(device_addr, size);
+        Nx2AddRangeOnce(uncommitted_gpu_modified_ranges, nx2_recent_uncommitted_ranges,
+                        nx2_recent_uncommitted_next, device_addr, size);
     } else {
         ArmReadTraps(device_addr, size);
     }
