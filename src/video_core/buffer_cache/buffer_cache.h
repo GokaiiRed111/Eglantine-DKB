@@ -1918,7 +1918,7 @@ void BufferCache<P>::Nx2NoteListSynced(DAddr page) {
 }
 
 template <class P>
-void BufferCache<P>::Nx2FlushGeometryListPages() {
+bool BufferCache<P>::Nx2FlushGeometryListPages() {
     if constexpr (!IS_OPENGL) {
         const u64 geometry_draws = Tegra::g_nx2_geometry_draws.load(std::memory_order_relaxed);
         std::vector<DAddr> pages;
@@ -1933,7 +1933,7 @@ void BufferCache<P>::Nx2FlushGeometryListPages() {
             }
         }
         if (pages.empty()) {
-            return;
+            return false;
         }
         std::ranges::sort(pages);
         constexpr u64 page_size = u64{1} << Tegra::Nx2WrittenPageBits;
@@ -2009,7 +2009,9 @@ void BufferCache<P>::Nx2FlushGeometryListPages() {
             entry.synced_writes = entry.writes;
             entry.synced_geometry_draws = geometry_draws;
         }
+        return true;
     }
+    return false;
 }
 
 template <class P>

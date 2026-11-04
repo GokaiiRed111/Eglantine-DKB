@@ -1186,8 +1186,13 @@ bool RasterizerVulkan::IsGpuWrittenCommandListPageWholly(DAddr page) {
 }
 
 void RasterizerVulkan::FlushGpuWrittenListPages() {
+    namespace Profile = VideoCommon::Nx2Profile;
+    const u64 start = Profile::Enabled() ? Profile::Now() : 0;
     std::scoped_lock lock{buffer_cache.mutex};
-    buffer_cache.Nx2FlushGeometryListPages();
+    if (buffer_cache.Nx2FlushGeometryListPages() && Profile::Enabled()) {
+        Profile::Add(Profile::Counter::GeometryListFlushes, 1);
+        Profile::Add(Profile::Counter::GeometryListFlushNs, Profile::Now() - start);
+    }
 }
 
 void RasterizerVulkan::FlushRegion(DAddr addr, u64 size, VideoCommon::CacheType which) {

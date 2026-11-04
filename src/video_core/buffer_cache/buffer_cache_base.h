@@ -350,7 +350,7 @@ public:
     }
     /// Front thread, the split drained: flushes every page geometry draws write, with one wait
     /// for the GPU, and notes them synced.
-    void Nx2FlushGeometryListPages();
+    bool Nx2FlushGeometryListPages();
     /// CPU and inline writes: they reach guest memory, so a synced page stays synced, but its copy
     /// no longer holds the page.
     void Nx2NoteListHostWrite(DAddr device_addr, u64 size);
