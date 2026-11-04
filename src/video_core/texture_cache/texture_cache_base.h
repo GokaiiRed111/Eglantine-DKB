@@ -472,9 +472,6 @@ private:
     /// Mark an image as modified from the GPU
     void MarkModification(ImageBase& image) noexcept;
 
-    /// Raises the alias_max_tick of every alias of the image to its modification_tick.
-    void Nx2PropagateModificationTick(const ImageBase& image) noexcept;
-
     /// Synchronize image aliases, copying data if needed
     void SynchronizeAliases(ImageId image_id);
 

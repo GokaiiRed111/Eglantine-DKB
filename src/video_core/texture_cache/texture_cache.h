@@ -2586,7 +2586,6 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         DeleteImage(copy_object.id);
     }
 
-    Nx2PropagateModificationTick(new_image);
     RegisterImage(new_image_id);
     return new_image_id;
 }
@@ -3333,30 +3332,12 @@ template <class P>
 void TextureCache<P>::MarkModification(ImageBase& image) noexcept {
     image.flags |= ImageFlagBits::GpuModified;
     image.modification_tick = ++modification_tick;
-    Nx2PropagateModificationTick(image);
-}
-
-template <class P>
-void TextureCache<P>::Nx2PropagateModificationTick(const ImageBase& image) noexcept {
-    for (const AliasedImage& aliased : image.aliased_images) {
-        ImageBase& other = slot_images[aliased.id];
-        other.alias_max_tick = (std::max)(other.alias_max_tick, image.modification_tick);
-    }
 }
 
 template <class P>
 void TextureCache<P>::SynchronizeAliases(ImageId image_id) {
     boost::container::small_vector<const AliasedImage*, 8> aliased_images;
     Image& image = slot_images[image_id];
-    // Checking every alias's tick was 5% of Donkey Kong Bananza's draw thread (images with many
-    // aliases, sampled draw after draw). EDEN_NX2_ALIAS_SKIP=0 always checks.
-    static const bool tuning = [] {
-        const char* value = std::getenv("EDEN_NX2_ALIAS_SKIP");
-        return value == nullptr || value[0] != '0';
-    }();
-    if (tuning && image.alias_max_tick <= image.modification_tick) {
-        return;
-    }
     bool any_rescaled = True(image.flags & ImageFlagBits::Rescaled);
     bool any_modified = True(image.flags & ImageFlagBits::GpuModified);
     u64 most_recent_tick = image.modification_tick;
@@ -3381,7 +3362,6 @@ void TextureCache<P>::SynchronizeAliases(ImageId image_id) {
         }
     }
     image.modification_tick = most_recent_tick;
-    Nx2PropagateModificationTick(image);
     if (any_modified) {
         image.flags |= ImageFlagBits::GpuModified;
     }
