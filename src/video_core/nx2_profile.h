@@ -77,10 +77,31 @@ inline u64 Now() {
     return static_cast<u64>(Common::g_wall_clock.GetTimeNS().count());
 }
 
+/// Why the split's front waited for its back (GpuSplit::Drain), counted with the time it took.
+enum class DrainCause : u32 {
+    Other,
+    Acquire,      ///< A semaphore acquire is checked (puller)
+    Resume,       ///< A suspended channel checks its acquire again
+    Semaphore,    ///< Other semaphore reads (old acquire methods, SEM_EXECUTE)
+    ListFlush,    ///< A command list on pages the GPU writes is read (FlushGpuWrittenCommands)
+    ParamFlush,   ///< EDEN_NX2_PBFLUSH macro parameters
+    Sync,         ///< A command list entry asks for a sync fence
+    MmeDmaRead,   ///< The front's macro reads GPU memory
+    CpuRead,      ///< A CPU read or flush of GPU memory
+    Count,
+};
+
+inline constexpr std::array<const char*, static_cast<size_t>(DrainCause::Count)> drain_names{
+    "other", "acquire", "resume", "semaphore", "list flush", "parameter flush", "sync",
+    "MME DMA read", "CPU read",
+};
+
 struct ThreadData {
     std::array<u64, static_cast<size_t>(Zone::Count)> exclusive_ns{};
     std::array<u64, static_cast<size_t>(Zone::Count)> count{};
     std::array<u64, 12> counters{}; ///< See Counter
+    std::array<u64, static_cast<size_t>(DrainCause::Count)> drains{};
+    std::array<u64, static_cast<size_t>(DrainCause::Count)> drain_ns{};
     u64 child_ns{};    ///< Time of the zones nested in the current one
     u64 window_start{};
 };
@@ -200,6 +221,18 @@ inline void Report(const char* thread_name = "GPU thread") {
     line += fmt::format(" | geometry list flushes {:.0f} ({:.1f} ms)",
                         static_cast<double>(data.counters[10]) * 1e9 / window,
                         static_cast<double>(data.counters[11]) * 1000.0 / window);
+    std::string drains;
+    for (size_t i = 0; i < data.drains.size(); ++i) {
+        if (data.drains[i] != 0) {
+            drains += fmt::format(" {} {:.0f} ({:.1f} ms),", drain_names[i],
+                                  static_cast<double>(data.drains[i]) * 1e9 / window,
+                                  static_cast<double>(data.drain_ns[i]) * 1000.0 / window);
+        }
+    }
+    if (!drains.empty()) {
+        drains.pop_back();
+        line += " | drains:" + drains;
+    }
     LOG_INFO(HW_GPU, "{} per second:{}", thread_name, line);
     data = {};
     data.window_start = now;

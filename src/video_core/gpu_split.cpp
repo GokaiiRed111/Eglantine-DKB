@@ -196,17 +196,23 @@ void GpuSplit::Publish() {
     }
 }
 
-void GpuSplit::Drain() {
+void GpuSplit::Drain(Nx2Profile::DrainCause cause) {
     consumed_cache = consumed.load(std::memory_order_acquire);
     if (consumed_cache == write_position) {
         return;
     }
     Publish();
     Nx2Profile::Scope scope{Nx2Profile::Zone::SplitDrain};
+    const u64 start = Nx2Profile::Enabled() ? Nx2Profile::Now() : 0;
     for (u32 spins = 0;; ++spins) {
         consumed_cache = consumed.load(std::memory_order_acquire);
         if (consumed_cache == write_position) {
             publish_every = 8;
+            if (Nx2Profile::Enabled()) {
+                const auto index = static_cast<size_t>(cause);
+                ++Nx2Profile::t_data.drains[index];
+                Nx2Profile::t_data.drain_ns[index] += Nx2Profile::Now() - start;
+            }
             return;
         }
         if (spins < 16384) {

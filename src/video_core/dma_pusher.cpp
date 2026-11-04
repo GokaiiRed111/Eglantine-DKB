@@ -126,7 +126,7 @@ bool DmaPusher::Step() {
                 }();
                 if (flush_parameters && words <= 64) {
                     if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
-                        split.Drain();
+                        split.Drain(VideoCommon::Nx2Profile::DrainCause::ParamFlush);
                     }
                     const GPUVAddr address = dma_state.dma_get;
                     const size_t bytes = words * sizeof(u32);
@@ -292,7 +292,7 @@ bool DmaPusher::Step() {
     }
 
     if (signal_sync) {
-        VideoCommon::GpuSplit::Get().Drain();
+        VideoCommon::GpuSplit::Get().Drain(VideoCommon::Nx2Profile::DrainCause::Sync);
         rasterizer->SignalFence([this]() {
             std::scoped_lock lk(sync_mutex);
             synced = true;
@@ -708,7 +708,7 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
     // The caches belong to the split's back: it first runs what the front queued (the dispatch
     // that writes these words among it). The whole pages are flushed: their next lists read
     // guest memory until GPU work writes them again.
-    VideoCommon::GpuSplit::Get().Drain();
+    VideoCommon::GpuSplit::Get().Drain(VideoCommon::Nx2Profile::DrainCause::ListFlush);
     if (rasterizer != nullptr) {
         // Pages geometry draws write (Bananza's terrain records): all at once, so the next lists
         // on them read guest memory until another geometry draw is sent.

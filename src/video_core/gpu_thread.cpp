@@ -100,7 +100,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                     split.Defer([gpu = &system.GPU()] { gpu->TickWork(); });
                 } else if (auto* run = std::get_if<RunCommand>(&next.data)) {
                     if (run->before_later_reads) {
-                        split.Drain();
+                        split.Drain(VideoCommon::Nx2Profile::DrainCause::CpuRead);
                         run->func();
                     } else {
                         split.DeferFunction(std::move(run->func));

@@ -11,6 +11,7 @@
 #include <type_traits>
 
 #include "common/common_types.h"
+#include "video_core/nx2_profile.h"
 
 namespace Core {
 class System;
@@ -98,7 +99,7 @@ public:
     /// Makes what was sent visible to the back.
     void Publish();
     /// Waits until the back executed everything sent so far.
-    void Drain();
+    void Drain(Nx2Profile::DrainCause cause = Nx2Profile::DrainCause::Other);
 
     /// Compute or copy work was just sent: what can write GPU-written command lists.
     void NoteWriter() {
