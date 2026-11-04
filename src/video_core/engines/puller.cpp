@@ -345,14 +345,14 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             return;
         }
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireChecks, 1);
-        // Already met in guest memory: go on without waiting for the back. Each wait emptied the
-        // back's queue and left it idle until the front sent more (Donkey Kong Bananza: ~440
-        // acquires a second, 460 ms of them waiting). Work still queued only releases later
-        // values; a page shader writes may hold newer data in the caches, so those still wait.
-        // EDEN_NX2_ACQUIRE_DRAIN=1 always waits as before.
+        // EDEN_NX2_ACQUIRE_EARLY=1 (experiment): go on past an acquire guest memory already meets
+        // without waiting for the back (unless a shader wrote the page). In Donkey Kong Bananza
+        // it saved the acquires' drains but not the time: the front then waited as long for the
+        // GPU-written command lists it reads next (WaitForWriters), with the back idle more
+        // often (190 against 80 ms a second) and 9% fewer draws a second.
         static const bool always_drain = [] {
-            const char* value = std::getenv("EDEN_NX2_ACQUIRE_DRAIN");
-            return value != nullptr && value[0] == '1';
+            const char* value = std::getenv("EDEN_NX2_ACQUIRE_EARLY");
+            return value == nullptr || value[0] != '1';
         }();
         if (!always_drain) {
             const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address);
