@@ -23,6 +23,7 @@
 #include "video_core/nx2.h"
 #include "video_core/engines/fermi_2d.h"
 #include "video_core/engines/kepler_compute.h"
+#include "video_core/engines/puller.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/memory_manager.h"
 #include "video_core/native_query_trace.h"
@@ -115,6 +116,7 @@ void KeplerCompute::ProcessNativeReportSemaphore(u32 argument) {
         });
         return;
     }
+    g_nx2_query_source = 6;
     rasterizer->Query(address, VideoCommon::QueryType::Payload,
                       one_word ? VideoCommon::QueryPropertiesFlags::IsAFence
                                : VideoCommon::QueryPropertiesFlags::HasTimeout,
@@ -398,6 +400,7 @@ bool KeplerCompute::ProcessNativeMethod(Core::System& system, u32 method, u32 ar
                     if (watch != 0 && (address & ~u64{0xf}) == (watch & ~u64{0xf})) {
                         LOG_INFO(HW_GPU, "Semaphore watch: QMD release {:#x} = {:#x} flags {:#x}", address, payload, flags);
                     }
+                    g_nx2_query_source = 7;
                     rasterizer->Query(address, VideoCommon::QueryType::Payload,
                         VideoCommon::QueryPropertiesFlags::IsAFence, payload, 0);
                 }

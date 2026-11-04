@@ -13,6 +13,7 @@
 #include "core/core.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/engines/maxwell_dma.h"
+#include "video_core/engines/puller.h"
 #include "video_core/guest_memory.h"
 #include "video_core/memory_manager.h"
 #include "video_core/renderer_base.h"
@@ -384,10 +385,12 @@ void MaxwellDMA::ReleaseSemaphore() {
     case LaunchDMA::SemaphoreType::NONE:
         break;
     case LaunchDMA::SemaphoreType::RELEASE_ONE_WORD_SEMAPHORE: {
+        g_nx2_query_source = 2;
         rasterizer->Query(address, VideoCommon::QueryType::Payload, flags, payload, 0);
         break;
     }
     case LaunchDMA::SemaphoreType::RELEASE_FOUR_WORD_SEMAPHORE: {
+        g_nx2_query_source = 2;
         rasterizer->Query(address, VideoCommon::QueryType::Payload,
                           flags | VideoCommon::QueryPropertiesFlags::HasTimeout, payload, 0);
         break;

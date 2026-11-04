@@ -1134,7 +1134,8 @@ void RasterizerVulkan::Query(GPUVAddr gpu_addr, VideoCommon::QueryType type,
                              VideoCommon::QueryPropertiesFlags flags, u32 payload, u32 subreport) {
     if (type == VideoCommon::QueryType::Payload) {
         // Diagnostics: semaphore releases as the back writes them (source 100: the query cache).
-        Tegra::Engines::Nx2RecordSemaphore(100, 0, gpu_addr, payload,
+        Tegra::Engines::Nx2RecordSemaphore(100 + std::exchange(Tegra::Engines::g_nx2_query_source, 0U),
+                                           static_cast<u32>(nx2_bound_channel), gpu_addr, payload,
                                            gpu_memory->GpuToCpuAddress(gpu_addr).value_or(0));
     }
     query_cache.CounterReport(gpu_addr, type, flags, payload, subreport);
@@ -2551,6 +2552,7 @@ void RasterizerVulkan::InitializeChannel(Tegra::Control::ChannelState& channel) 
 
 void RasterizerVulkan::BindChannel(Tegra::Control::ChannelState& channel) {
     const s32 channel_id = channel.bind_id;
+    nx2_bound_channel = channel_id;
     BindToChannel(channel_id);
     {
         std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};

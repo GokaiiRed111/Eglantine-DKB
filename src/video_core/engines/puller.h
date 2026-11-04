@@ -52,6 +52,12 @@ u64 Nx2SemaphoreCount();
 /// Whether a GPU release noted at or after `since` meets the acquire (operation, value) on the
 /// device address; false when the history no longer reaches back that far.
 bool Nx2ReleasedByGpuSince(u64 since, u64 device, u32 operation, u32 value);
+/// Diagnostics: which engine issues the next payload release reaching RasterizerVulkan::Query
+/// (1 3D report, 2 DMA, 3 puller semaphore, 4 puller release, 5 SEM_EXECUTE, 6 compute report,
+/// 7 compute QMD, 8 mirror). Set on the thread that calls Query, right before it.
+extern thread_local u32 g_nx2_query_source;
+/// Diagnostics: the channel whose commands this thread is parsing (DmaPusher::DispatchCalls).
+extern thread_local s32 g_nx2_front_channel;
 
 class Puller final {
 public:

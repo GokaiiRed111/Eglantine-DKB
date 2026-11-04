@@ -244,6 +244,7 @@ private:
 
     u32 draw_counter = 0;
     bool mesh_draw{}; ///< the draw being prepared uses a task/mesh pipeline
+    s32 nx2_bound_channel{-1}; ///< Diagnostics: the channel BindChannel bound last
 };
 
 } // namespace Vulkan

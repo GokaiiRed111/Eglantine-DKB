@@ -73,15 +73,31 @@ std::atomic<u64> g_semaphore_count{};
 
 void PrintSemaphoreHistory(u64 device) {
     const u64 count = g_semaphore_count.load(std::memory_order_relaxed);
-    const u64 shown = (std::min<u64>)(count, 256);
+    const u64 shown = (std::min<u64>)(count, 1024);
     u32 printed = 0;
     for (u64 i = count - shown; i < count; ++i) {
         const auto& record = g_semaphore_history[i % g_semaphore_history.size()];
         // Every operation on the waited page, and the last 32 of all.
         if ((record.device >> 12) == (device >> 12) || i + 32 >= count) {
-            LOG_WARNING(HW_GPU, "  semaphore -{}: channel {} op {} {:#x} (device {:#x}) value {:#x}",
-                        count - 1 - i, record.channel, record.op, record.address, record.device,
-                        record.value);
+            if (record.channel >= 200) {
+                LOG_WARNING(HW_GPU, "  semaphore -{}: front sends a 3D report{} on channel {}: {:#x} (device {:#x}) value {:#x}",
+                            count - 1 - i, record.channel == 201 ? " from a macro" : "",
+                            static_cast<s32>(record.op), record.address, record.device,
+                            record.value);
+            } else if (record.channel >= 100) {
+                static constexpr std::array<const char*, 9> sources{
+                    "?", "3D report", "DMA", "puller semaphore", "puller release",
+                    "SEM_EXECUTE", "compute report", "compute QMD", "mirror"};
+                const u32 source = record.channel - 100;
+                LOG_WARNING(HW_GPU, "  semaphore -{}: release by {} (bound channel {}) {:#x} (device {:#x}) value {:#x}",
+                            count - 1 - i, source < sources.size() ? sources[source] : "?",
+                            static_cast<s32>(record.op), record.address, record.device,
+                            record.value);
+            } else {
+                LOG_WARNING(HW_GPU, "  semaphore -{}: channel {} op {} {:#x} (device {:#x}) value {:#x}",
+                            count - 1 - i, record.channel, record.op, record.address,
+                            record.device, record.value);
+            }
             ++printed;
         }
     }
@@ -89,6 +105,9 @@ void PrintSemaphoreHistory(u64 device) {
 }
 
 } // Anonymous namespace
+
+thread_local u32 g_nx2_query_source{};
+thread_local s32 g_nx2_front_channel{-1};
 
 void Nx2RecordSemaphore(u32 channel, u32 op, GPUVAddr address, u32 value, u64 device) {
     const u64 index = g_semaphore_count.fetch_add(1, std::memory_order_relaxed);
@@ -107,7 +126,7 @@ bool Nx2ReleasedByGpuSince(u64 since, u64 device, u32 operation, u32 value) {
     for (u64 i = since; i < count; ++i) {
         const auto& record = g_semaphore_history[i % g_semaphore_history.size()];
         // Releases: the back's (query cache, source 100) and the puller's (operation 2).
-        const bool release = record.channel == 100 || record.op == 2;
+        const bool release = (record.channel >= 100 && record.channel < 200) || record.op == 2;
         if (!release || record.device != device) {
             continue;
         }
@@ -300,8 +319,10 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             LOG_DEBUG(HW_GPU, "Switch 2 semaphore {:#x}={:#x} mirrored to {:#x}", sequence_address, payload, mirror);
         }
         OnBack([rasterizer = dma_pusher.rasterizer, sequence_address, mirror, properties, payload] {
+            g_nx2_query_source = 3;
             rasterizer->Query(sequence_address, VideoCommon::QueryType::Payload, properties, payload, 0);
             if (mirror != 0) {
+                g_nx2_query_source = 8;
                 rasterizer->Query(mirror, VideoCommon::QueryType::Payload, properties, payload, 0);
             }
         });
@@ -377,6 +398,7 @@ void Puller::ProcessSemaphoreRelease(DmaPusher& dma_pusher) {
     const GPUVAddr sequence_address{regs.semaphore_address.SemaphoreAddress()};
     const u32 payload = regs.semaphore_release;
     OnBack([rasterizer = dma_pusher.rasterizer, sequence_address, payload] {
+        g_nx2_query_source = 4;
         rasterizer->Query(sequence_address, VideoCommon::QueryType::Payload,
                           VideoCommon::QueryPropertiesFlags::IsAFence, payload, 0);
     });
@@ -406,6 +428,7 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
     const u32 operation = argument & 7;
     if (operation == 1) { // RELEASE
         OnBack([rasterizer = dma_pusher.rasterizer, address, payload] {
+            g_nx2_query_source = 5;
             rasterizer->Query(address, VideoCommon::QueryType::Payload,
                               VideoCommon::QueryPropertiesFlags::IsAFence, payload, 0);
         });
@@ -421,6 +444,8 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
                        : operation == 4 ? (word & payload) != 0
                        : operation == 5 ? (word & payload) == 0
                                         : true;
+    Nx2RecordSemaphore(dma_pusher.channel_state.bind_id, 0x20 + operation, address, payload,
+                       dma_pusher.memory_manager.GpuToCpuAddress(address).value_or(0));
     if (!ready) {
         static std::atomic<u32> reported{};
         if (reported.fetch_add(1) < 8) {

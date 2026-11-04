@@ -18,6 +18,7 @@
 #include "video_core/nx2.h"
 #include "video_core/dirty_flags.h"
 #include "video_core/engines/maxwell_3d.h"
+#include "video_core/engines/puller.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
@@ -625,6 +626,7 @@ void Maxwell3D::ProcessQueryGet() {
         if (regs.report_semaphore.query.short_query != 0) {
             flags |= VideoCommon::QueryPropertiesFlags::IsAFence;
         }
+        g_nx2_query_source = 1;
         rasterizer->Query(sequence_address, query_type, flags, payload, subreport);
         break;
     case Regs::ReportSemaphore::Operation::Acquire:
@@ -633,6 +635,7 @@ void Maxwell3D::ProcessQueryGet() {
         UNIMPLEMENTED_MSG("Unimplemented query operation ACQUIRE");
         break;
     case Regs::ReportSemaphore::Operation::ReportOnly:
+        g_nx2_query_source = 1;
         rasterizer->Query(sequence_address, query_type, flags, payload, subreport);
         break;
     case Regs::ReportSemaphore::Operation::Trap:
@@ -971,6 +974,15 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
             }
             break;
         }
+    }
+    if (method == MAXWELL3D_REG_INDEX(report_semaphore.query)) {
+        // Diagnostics: the report as the front sends it (the back records it again in Query).
+        const GPUVAddr report_address =
+            (GPUVAddr{fs.regs[MAXWELL3D_REG_INDEX(report_semaphore.address_high)]} << 32) |
+            fs.regs[MAXWELL3D_REG_INDEX(report_semaphore.address_low)];
+        Nx2RecordSemaphore(from_macro ? 201 : 200, static_cast<u32>(g_nx2_front_channel),
+                           report_address, fs.regs[MAXWELL3D_REG_INDEX(report_semaphore.payload)],
+                           memory_manager.GpuToCpuAddress(report_address).value_or(0));
     }
     if (from_macro) {
         split.MacroWrite(this, method, argument);
