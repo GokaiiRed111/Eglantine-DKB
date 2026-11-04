@@ -771,6 +771,13 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
         fortunes_weave = upscale_pair(input, output);
     }
     if (!upscale_pair(input, output)) {
+        // Donkey Kong Bananza's two upscalers (the opening's and the one it runs later): the
+        // frame at the dynamic resolution at cbuf0+0x60, the 1080p output at +0x70. The largest
+        // pair among all handles was a 1280x720 image blitted over a 2880x1620 one in play.
+        input = image(0x60);
+        output = image(0x70);
+    }
+    if (!upscale_pair(input, output)) {
         input.reset();
         output.reset();
         const auto found = FindUpscalePair(upscale_pair);
@@ -941,10 +948,16 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
         return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 30U;
     }();
     if (static u32 count{}; ++count == trace_at) g_nx2_trace_draws_after_upscale = 40;
+    // Each new pair (up to 16), besides the first four blits.
+    static std::vector<std::pair<GPUVAddr, GPUVAddr>> pairs_seen;
+    const std::pair<GPUVAddr, GPUVAddr> this_pair{input->Address(), output->Address()};
+    const bool new_pair = pairs_seen.size() < 16 &&
+                          std::ranges::find(pairs_seen, this_pair) == pairs_seen.end();
+    if (new_pair) pairs_seen.push_back(this_pair);
     static u32 logged{};
-    if (logged++ < 4) {
-        LOG_INFO(HW_GPU, "Upscale fallback {:#x} {}x{} block {}/{}/{} -> {:#x} {}x{} block {}/{}/{} levels {}: {}",
-                 input->Address(), input->Width(), input->Height(), input->block_width.Value(),
+    if (logged++ < 4 || new_pair) {
+        LOG_INFO(HW_GPU, "Upscale fallback (program {:#x}) {:#x} {}x{} block {}/{}/{} -> {:#x} {}x{} block {}/{}/{} levels {}: {}",
+                 program, input->Address(), input->Width(), input->Height(), input->block_width.Value(),
                  input->block_height.Value(), input->block_depth.Value(), output->Address(),
                  output->Width(), output->Height(), output->block_width.Value(),
                  output->block_height.Value(), output->block_depth.Value(), output->max_mip_level.Value(),
