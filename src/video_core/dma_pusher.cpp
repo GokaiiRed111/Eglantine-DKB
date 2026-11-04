@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstdio>
+#include <string_view>
 
 #include "common/scope_exit.h"
 #include "common/settings.h"
@@ -198,15 +199,32 @@ bool DmaPusher::Step() {
         // safe read below would flush (with the split, the front can't tell: it reads memory
         // unflushed anyway). Entries on pages the GPU writes (culling) always take the flushing
         // read: their words at submit time are an older frame's.
-        const bool submitted = command_resume_offset == 0 && !parameters_flushed &&
-                               dma_pushbuffer_subindex < command_list.submitted_offsets.size() &&
-                               (command_list.snapshot_suspensions & 1) == 0 &&
-                               command_list.snapshot_suspensions ==
-                                   suspensions.load(std::memory_order_acquire) &&
-                               !IsGpuWrittenCommands(dma_state.dma_get,
-                                                     size_t{header.size} * sizeof(u32)) &&
-                               !(use_safe && memory_manager.IsMemoryDirty(dma_state.dma_get,
-                                                                          header.size * sizeof(u32)));
+        // Lists behind a suspension read memory upstream (256b1dc34: the CPU writes them before
+        // it releases the acquire). Donkey Kong Bananza refills that memory with a later frame's
+        // commands before the GPU thread gets there: an 18-word entry read from memory ended
+        // inside a method and its data swallowed the next entry's headers (a crash), or a
+        // semaphore release went missing (a freeze). This fork keeps the submitted words for
+        // them; EDEN_NX2_PB_SUSPENDED=memory reads memory as upstream does.
+        static const bool snapshot_behind_suspensions = [] {
+            const char* value = std::getenv("EDEN_NX2_PB_SUSPENDED");
+            return value == nullptr || std::string_view{value} != "memory";
+        }();
+        const bool has_snapshot = command_resume_offset == 0 && !parameters_flushed &&
+                                  dma_pushbuffer_subindex < command_list.submitted_offsets.size() &&
+                                  !IsGpuWrittenCommands(dma_state.dma_get,
+                                                        size_t{header.size} * sizeof(u32)) &&
+                                  !(use_safe && memory_manager.IsMemoryDirty(
+                                                    dma_state.dma_get, header.size * sizeof(u32)));
+        const bool behind_suspension =
+            (command_list.snapshot_suspensions & 1) != 0 ||
+            command_list.snapshot_suspensions != suspensions.load(std::memory_order_acquire);
+        if (has_snapshot && behind_suspension) {
+            NoteSuspendedSnapshot(header, command_list.submitted_words.data() +
+                                              command_list.submitted_offsets[dma_pushbuffer_subindex],
+                                  snapshot_behind_suspensions);
+        }
+        const bool submitted =
+            has_snapshot && (!behind_suspension || snapshot_behind_suspensions);
         if (submitted) {
             const std::span<const CommandHeader> commands{
                 command_list.submitted_words.data() +
@@ -539,6 +557,37 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
         subchannel->ConsumeSink(system);
         subchannel->current_dma_segment = dma_state.dma_get + dma_state.dma_word_offset;
         subchannel->CallMultiMethod(system, dma_state.method, base_start, num_methods, dma_state.method_count);
+    }
+}
+
+void DmaPusher::NoteSuspendedSnapshot(const CommandListHeader& header,
+                                      const CommandHeader* snapshot, bool runs_snapshot) {
+    // Diagnostics: how often memory no longer holds what was submitted for an entry queued
+    // behind a suspension, and where the two first differ.
+    static std::atomic<u64> checked{};
+    static std::atomic<u64> differed{};
+    const u64 check = checked.fetch_add(1, std::memory_order_relaxed) + 1;
+    std::vector<u32> words(header.size);
+    memory_manager.ReadBlockUnsafe(header.addr, words.data(), words.size() * sizeof(u32));
+    size_t first = words.size();
+    for (size_t i = 0; i < words.size(); ++i) {
+        if (words[i] != snapshot[i].argument) {
+            first = i;
+            break;
+        }
+    }
+    if (first == words.size()) {
+        return;
+    }
+    const u64 count = differed.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (count <= 24 || count % 1000 == 0) {
+        LOG_WARNING(HW_GPU,
+                    "Entry {:#x}+{:#x} on channel {} behind a suspension: memory differs from the "
+                    "submitted words at word {} ({:08x} now, {:08x} submitted); running the {} "
+                    "({} of {} such entries differed)",
+                    u64{header.addr}, u64{header.size}, channel_state.bind_id, first, words[first],
+                    snapshot[first].argument, runs_snapshot ? "submitted words" : "memory", count,
+                    check);
     }
 }
 

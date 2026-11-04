@@ -201,6 +201,9 @@ public:
     /// After a resume from an acquire another channel's GPU work released: the queued entries
     /// keep running the words captured at submission.
     void KeepSnapshots();
+    /// Diagnostics: compares an entry queued behind a suspension with memory (logs differences).
+    void NoteSuspendedSnapshot(const CommandListHeader& header, const CommandHeader* snapshot,
+                               bool runs_snapshot);
     bool IsGpuWrittenCommands(GPUVAddr address, size_t size);
     /// Reads a command list on pages the GPU wrote into command_headers, from the copies the
     /// buffer cache made after the work that wrote them or from guest memory for pages flushed
