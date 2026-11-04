@@ -23,7 +23,6 @@
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
 #include "video_core/memory_manager.h"
-#include "video_core/nx2.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/textures/texture.h"
@@ -1171,6 +1170,20 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
     const u32 ram = fs.regs[0x156];
     const u32 words = std::min<u32>(count, 0x1000);
     const size_t read_bytes = size_t{words} * sizeof(u32);
+    if (VideoCommon::Nx2Profile::Enabled()) {
+        // Diagnostics: how many of these reads could skip the drain (no GPU-written page).
+        bool gpu_written = false;
+        for (GPUVAddr page = source & ~GPUVAddr{0xfff}; page < source + read_bytes; page += 0x1000) {
+            if (const auto device = memory_manager.GpuToCpuAddress(page);
+                device && Tegra::Nx2IsGpuWritten(*device)) {
+                gpu_written = true;
+                break;
+            }
+        }
+        if (gpu_written) {
+            VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::DmaReadsOnGpuPages, 1);
+        }
+    }
     if (VideoCommon::Nx2Profile::Enabled()) {
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::DmaReadBytes, read_bytes);
     }

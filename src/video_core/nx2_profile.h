@@ -99,7 +99,7 @@ inline constexpr std::array<const char*, static_cast<size_t>(DrainCause::Count)>
 struct ThreadData {
     std::array<u64, static_cast<size_t>(Zone::Count)> exclusive_ns{};
     std::array<u64, static_cast<size_t>(Zone::Count)> count{};
-    std::array<u64, 12> counters{}; ///< See Counter
+    std::array<u64, 14> counters{}; ///< See Counter
     std::array<u64, static_cast<size_t>(DrainCause::Count)> drains{};
     std::array<u64, static_cast<size_t>(DrainCause::Count)> drain_ns{};
     u64 child_ns{};    ///< Time of the zones nested in the current one
@@ -155,6 +155,8 @@ enum class Counter : u32 {
     EmptyDraws,     ///< Of Draws: no vertices or no instances, skipped before any setup
     GeometryListFlushes, ///< Flushes of the command list pages geometry draws write
     GeometryListFlushNs, ///< Time those took (one wait for the host GPU each)
+    AcquiresMetEarly, ///< Of AcquireChecks: met in guest memory without waiting for the back
+    DmaReadsOnGpuPages, ///< Front MME DMA reads of pages GPU work has written
 };
 
 /// Device pages (4 KiB) the native MME has DMA-read since start (GPU thread only; filled only
@@ -212,12 +214,15 @@ inline void Report(const char* thread_name = "GPU thread") {
     line += fmt::format(" | 3D register writes {:.0f} ({:.0f} same value)",
                         static_cast<double>(data.counters[4]) * 1e9 / window,
                         static_cast<double>(data.counters[5]) * 1e9 / window);
-    line += fmt::format(" | acquires {:.0f} ({:.0f} waited)",
+    line += fmt::format(" | acquires {:.0f} ({:.0f} met without a drain, {:.0f} waited)",
                         static_cast<double>(data.counters[6]) * 1e9 / window,
+                        static_cast<double>(data.counters[12]) * 1e9 / window,
                         static_cast<double>(data.counters[7]) * 1e9 / window);
     line += fmt::format(" | draws {:.0f} ({:.0f} empty, skipped)",
                         static_cast<double>(data.counters[8]) * 1e9 / window,
                         static_cast<double>(data.counters[9]) * 1e9 / window);
+    line += fmt::format(" | MME DMA reads on GPU-written pages {:.0f}",
+                        static_cast<double>(data.counters[13]) * 1e9 / window);
     line += fmt::format(" | geometry list flushes {:.0f} ({:.1f} ms)",
                         static_cast<double>(data.counters[10]) * 1e9 / window,
                         static_cast<double>(data.counters[11]) * 1000.0 / window);
