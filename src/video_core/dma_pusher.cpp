@@ -709,6 +709,11 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
     // that writes these words among it). The whole pages are flushed: their next lists read
     // guest memory until GPU work writes them again.
     VideoCommon::GpuSplit::Get().Drain();
+    if (rasterizer != nullptr) {
+        // Pages geometry draws write (Bananza's terrain records): all at once, so the next lists
+        // on them read guest memory until another geometry draw is sent.
+        rasterizer->FlushGpuWrittenListPages();
+    }
     const GPUVAddr first_page = address & ~GPUVAddr{0xfff};
     const GPUVAddr end_page = (address + size + 0xfff) & ~GPUVAddr{0xfff};
     // Pages draws write (Donkey Kong Bananza's terrain culling writes its indirect draw records

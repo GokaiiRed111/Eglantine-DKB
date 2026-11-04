@@ -116,6 +116,8 @@ public:
     virtual bool IsGpuWrittenCommandListPageWholly([[maybe_unused]] DAddr page) {
         return false;
     }
+    /// Switch 2, the split drained: flush the command list pages only geometry draws write.
+    virtual void FlushGpuWrittenListPages() {}
 
     /// Check if the the specified memory area requires flushing to CPU Memory.
     virtual bool MustFlushRegion(DAddr addr, u64 size,

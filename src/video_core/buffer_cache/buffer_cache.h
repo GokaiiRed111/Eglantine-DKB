@@ -1753,7 +1753,22 @@ void BufferCache<P>::Nx2NoteListWrite(BufferId buffer_id, DAddr device_addr, u64
                     std::scoped_lock lock{nx2_list_mutex};
                     Nx2ListPage& entry = nx2_list_pages[page_addr];
                     ++entry.writes;
-                    if (!nx2_collect_list_copies && !entry.draw_written) {
+                    // Geometry draws the split's front counts as it sends them (it runs the
+                    // macros): synced by that count, without draining for every list.
+                    const bool counted_geometry =
+                        nx2_geometry_draw &&
+                        Tegra::g_nx2_front_counts_geometry.load(std::memory_order_relaxed);
+                    if (!nx2_collect_list_copies && counted_geometry && !entry.draw_written) {
+                        if (!entry.geometry_written) {
+                            entry.geometry_written = true;
+                            static std::atomic<u32> geometry_logs{};
+                            if (geometry_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+                                LOG_INFO(HW_GPU, "Command list page {:#x} is written by geometry "
+                                                 "draws",
+                                         page_addr);
+                            }
+                        }
+                    } else if (!nx2_collect_list_copies && !entry.draw_written) {
                         entry.draw_written = true;
                         LOG_INFO(HW_GPU, "Command list page {:#x} is written by draws too: its "
                                          "lists drain the split",
@@ -1837,7 +1852,8 @@ auto BufferCache<P>::Nx2ReadListCopy(DAddr device_addr, std::span<u8> out) -> Nx
             return Nx2ListRead::Unknown;
         }
         const auto current = [&](const Nx2ListPage& entry) {
-            return entry.copy && !entry.draw_written && entry.copy_writes == entry.writes &&
+            return entry.copy && !entry.draw_written && !entry.geometry_written &&
+                   entry.copy_writes == entry.writes &&
                    offset >= entry.copy_begin && offset + out.size() <= entry.copy_end;
         };
         u64 tick{};
@@ -1850,7 +1866,10 @@ auto BufferCache<P>::Nx2ReadListCopy(DAddr device_addr, std::span<u8> out) -> Nx
             }
             const Nx2ListPage& entry = it->second;
             // Pages the CPU writes the lists of (GPU-written once, long before) stay synced.
-            if (!entry.draw_written && entry.synced_writes == entry.writes) {
+            if (!entry.draw_written && entry.synced_writes == entry.writes &&
+                (!entry.geometry_written ||
+                 entry.synced_geometry_draws ==
+                     Tegra::g_nx2_geometry_draws.load(std::memory_order_relaxed))) {
                 return Nx2ListRead::Synced;
             }
             if (!current(entry)) {
@@ -1894,6 +1913,102 @@ void BufferCache<P>::Nx2NoteListSynced(DAddr page) {
         std::scoped_lock lock{nx2_list_mutex};
         Nx2ListPage& entry = nx2_list_pages[page];
         entry.synced_writes = entry.writes;
+        entry.synced_geometry_draws = Tegra::g_nx2_geometry_draws.load(std::memory_order_relaxed);
+    }
+}
+
+template <class P>
+void BufferCache<P>::Nx2FlushGeometryListPages() {
+    if constexpr (!IS_OPENGL) {
+        const u64 geometry_draws = Tegra::g_nx2_geometry_draws.load(std::memory_order_relaxed);
+        std::vector<DAddr> pages;
+        {
+            std::scoped_lock lock{nx2_list_mutex};
+            for (const auto& [page, entry] : nx2_list_pages) {
+                if (entry.geometry_written && !entry.draw_written &&
+                    (entry.synced_writes != entry.writes ||
+                     entry.synced_geometry_draws != geometry_draws)) {
+                    pages.push_back(page);
+                }
+            }
+        }
+        if (pages.empty()) {
+            return;
+        }
+        std::ranges::sort(pages);
+        constexpr u64 page_size = u64{1} << Tegra::Nx2WrittenPageBits;
+        // The GPU-modified parts of every page, all copied before one wait for the GPU (a flush
+        // of each page waits once per page).
+        struct Download {
+            Buffer* buffer;
+            BufferCopy copy;
+        };
+        std::vector<Download> downloads;
+        u64 total_size_bytes = 0;
+        for (size_t first = 0; first < pages.size();) {
+            size_t last = first + 1;
+            while (last < pages.size() && pages[last] == pages[last - 1] + page_size) {
+                ++last;
+            }
+            const DAddr run_addr = pages[first];
+            const u64 run_size = (last - first) * page_size;
+            ForEachBufferInRange(run_addr, run_size, [&](BufferId, Buffer& buffer) {
+                // Only this buffer's part of the run: the copies are offsets into it.
+                const DAddr buffer_addr = buffer.CpuAddr();
+                const DAddr part_begin = (std::max)(run_addr, buffer_addr);
+                const DAddr part_end =
+                    (std::min)(run_addr + run_size, buffer_addr + buffer.SizeBytes());
+                if (part_begin >= part_end) {
+                    return;
+                }
+                memory_tracker.ForEachDownloadRangeAndClear(
+                    part_begin, part_end - part_begin, [&](u64 range_addr, u64 range_size) {
+                        gpu_modified_ranges.ForEachInRange(
+                            range_addr, range_size, [&](DAddr start, DAddr end) {
+                                const u64 copy_size = end - start;
+                                downloads.push_back({&buffer, BufferCopy{
+                                                                  .src_offset = start - buffer_addr,
+                                                                  .dst_offset = total_size_bytes,
+                                                                  .size = copy_size,
+                                                              }});
+                                total_size_bytes += (copy_size + 63) & ~u64{63};
+                            });
+                        ClearDownload(range_addr, range_size);
+                        gpu_modified_ranges.Subtract(range_addr, range_size);
+                    });
+            });
+            first = last;
+        }
+        if (total_size_bytes != 0) {
+            auto staging = runtime.DownloadStagingBuffer(total_size_bytes);
+            std::vector<BufferCopy> copies;
+            for (size_t first = 0; first < downloads.size();) {
+                // One copy command for each buffer's run of ranges.
+                Buffer* const buffer = downloads[first].buffer;
+                copies.clear();
+                size_t last = first;
+                for (; last < downloads.size() && downloads[last].buffer == buffer; ++last) {
+                    downloads[last].copy.dst_offset += staging.offset;
+                    buffer->MarkUsage(downloads[last].copy.src_offset, downloads[last].copy.size);
+                    copies.push_back(downloads[last].copy);
+                }
+                runtime.CopyBuffer(staging.buffer, *buffer, copies, true);
+                first = last;
+            }
+            runtime.Finish();
+            const u8* const mapped = staging.mapped_span.data();
+            for (const Download& download : downloads) {
+                device_memory.WriteBlockUnsafe(
+                    download.buffer->CpuAddr() + download.copy.src_offset,
+                    mapped + (download.copy.dst_offset - staging.offset), download.copy.size);
+            }
+        }
+        std::scoped_lock lock{nx2_list_mutex};
+        for (const DAddr page : pages) {
+            Nx2ListPage& entry = nx2_list_pages[page];
+            entry.synced_writes = entry.writes;
+            entry.synced_geometry_draws = geometry_draws;
+        }
     }
 }
 

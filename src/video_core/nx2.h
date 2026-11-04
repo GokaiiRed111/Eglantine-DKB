@@ -51,6 +51,13 @@ inline std::array<std::atomic<u64>, (u64{1} << (36 - Nx2WrittenPageBits)) / 64> 
 inline std::atomic<bool> g_nx2_has_command_list_pages{false};
 /// Diagnostics: a macro failed (garbage parameters): the DMA pusher dumps the entries around it.
 inline std::atomic<bool> g_nx2_dump_request{false};
+/// Draw methods the split's front sent while a geometry program was bound: only such draws write
+/// the command list pages BufferCache::Nx2ListPage::geometry_written names, so those pages stay
+/// synced while this count is unchanged (Donkey Kong Bananza's terrain culling program counts
+/// triangles into indirect draw records that later command lists read).
+inline std::atomic<u64> g_nx2_geometry_draws{0};
+/// The split's front runs the 3D engine's macros and so counts g_nx2_geometry_draws.
+inline std::atomic<bool> g_nx2_front_counts_geometry{false};
 
 inline void Nx2MarkCommandListPage(u64 device_address) {
     const u64 page = device_address >> Nx2WrittenPageBits;
@@ -82,6 +89,7 @@ inline void Nx2ClearGpuWrittenPages() {
         word.store(0, std::memory_order_relaxed);
     }
     g_nx2_has_command_list_pages.store(false, std::memory_order_relaxed);
+    g_nx2_front_counts_geometry.store(false, std::memory_order_relaxed);
 }
 
 [[nodiscard]] inline bool Nx2IsGpuWritten(u64 device_address) {

@@ -23,6 +23,7 @@
 #include "video_core/gpu.h"
 #include "video_core/gpu_split.h"
 #include "video_core/memory_manager.h"
+#include "video_core/nx2.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/textures/texture.h"
@@ -886,6 +887,16 @@ bool FrontSkipSame() {
     return skip;
 }
 
+// A draw method sent while a geometry program is bound: such draws write the command list pages
+// synced by their count (nx2.h, g_nx2_geometry_draws).
+void FrontNoteGeometryDraw(const std::array<u32, Maxwell3D::Regs::NUM_REGS>& regs) {
+    constexpr size_t geometry = MAXWELL3D_REG_INDEX(pipelines) +
+                                4 * sizeof(Maxwell3D::Regs::Pipeline) / sizeof(u32);
+    if (regs[geometry] & 1) {
+        Tegra::g_nx2_geometry_draws.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 } // Anonymous namespace
 
 Maxwell3D::FrontState& Maxwell3D::Front(Core::System& system, VideoCommon::GpuSplit& split) {
@@ -904,6 +915,7 @@ Maxwell3D::FrontState& Maxwell3D::Front(Core::System& system, VideoCommon::GpuSp
         macro_params.clear();
         executing_macro = 0;
         front_macros = true;
+        Tegra::g_nx2_front_counts_geometry.store(true, std::memory_order_relaxed);
     }
     return *front;
 }
@@ -971,6 +983,7 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
                 fs.regs[MAXWELL3D_REG_INDEX(const_buffer.offset)] += sizeof(u32);
             } else if (!FrontHandledOutsideDrawManager(method)) {
                 fs.draw_pending = true;
+                FrontNoteGeometryDraw(fs.regs);
             }
             break;
         }
@@ -1043,6 +1056,7 @@ void Maxwell3D::FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit
             fs.regs[method] = last;
         }
         fs.draw_pending = true;
+        FrontNoteGeometryDraw(fs.regs);
     } else {
         // CallMethod for each word, macro uploads among them (load_mme.instruction). A word may
         // change the shadow RAM mode for the next (a run of SET_SHADOW_RAM_CONTROL writes).
@@ -1088,6 +1102,7 @@ void Maxwell3D::FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit
             default:
                 if (!FrontHandledOutsideDrawManager(method)) {
                     fs.draw_pending = true;
+                    FrontNoteGeometryDraw(fs.regs);
                 }
                 break;
             }

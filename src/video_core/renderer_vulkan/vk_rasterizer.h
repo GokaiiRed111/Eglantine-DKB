@@ -102,6 +102,7 @@ public:
     GpuWrittenList ReadGpuWrittenCommandList(DAddr addr, std::span<u8> out) override;
     void NoteGpuWrittenCommandListSynced(DAddr page) override;
     bool IsGpuWrittenCommandListPageWholly(DAddr page) override;
+    void FlushGpuWrittenListPages() override;
     bool MustFlushRegion(DAddr addr, u64 size,
                          VideoCommon::CacheType which = VideoCommon::CacheType::All) override;
     VideoCore::RasterizerDownloadArea GetFlushArea(DAddr addr, u64 size) override;
