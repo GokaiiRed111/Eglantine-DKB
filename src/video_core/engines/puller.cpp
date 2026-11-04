@@ -111,6 +111,9 @@ thread_local u32 g_nx2_query_source{};
 thread_local s32 g_nx2_front_channel{-1};
 
 void Nx2RecordSemaphore(u32 channel, u32 op, GPUVAddr address, u32 value, u64 device) {
+    if (device != 0) {
+        Tegra::Nx2MarkSemaphorePage(device);
+    }
     const u64 index = g_semaphore_count.fetch_add(1, std::memory_order_relaxed);
     g_semaphore_history[index % g_semaphore_history.size()] = {channel, op, address, value, device};
 }

@@ -1163,13 +1163,40 @@ void Maxwell3D::FrontRunMacro(Core::System& system, VideoCommon::GpuSplit& split
 
 void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 method,
                              u32 count) {
-    // The words may be written by methods still queued for the back (indirect draw arguments
-    // from a culling dispatch), and the caches that may hold newer ones belong to it.
-    split.Drain(VideoCommon::Nx2Profile::DrainCause::MmeDmaRead);
     const GPUVAddr source = (GPUVAddr{fs.regs[0x154] & 0x1ffffff} << 32) | fs.regs[0x155];
     const u32 ram = fs.regs[0x156];
     const u32 words = std::min<u32>(count, 0x1000);
     const size_t read_bytes = size_t{words} * sizeof(u32);
+    // The words may be written by methods still queued for the back (indirect draw arguments
+    // from a culling dispatch), and the caches that may hold newer ones belong to it: wait for
+    // all of it. Donkey Kong Bananza's ~500 reads a second are of pages no shader, copy or
+    // semaphore ever wrote; for those, wait only for the compute and copy work queued (which
+    // could write such a page for the first time), not for every draw.
+    // EDEN_NX2_DMA_DRAIN=1 always waits for everything.
+    static const bool always_drain = [] {
+        const char* value = std::getenv("EDEN_NX2_DMA_DRAIN");
+        return value != nullptr && value[0] == '1';
+    }();
+    bool gpu_written_source = always_drain;
+    for (GPUVAddr page = source & ~GPUVAddr{0xfff};
+         !gpu_written_source && page < source + read_bytes; page += 0x1000) {
+        const auto device = memory_manager.GpuToCpuAddress(page);
+        gpu_written_source = !device || Tegra::Nx2IsGpuWritten(*device) ||
+                             Tegra::Nx2IsSemaphorePage(*device);
+    }
+    if (!gpu_written_source) {
+        split.WaitForWriters();
+        for (u32 i = 0; i < words; ++i) {
+            const u32 word = memory_manager.Read<u32>(source + u64{i} * sizeof(u32));
+            if (method == 0x158) {
+                fs.parameters.push_back(word);
+            } else if (ram + i < native_data_ram.size()) {
+                native_data_ram[ram + i] = word;
+            }
+        }
+        return;
+    }
+    split.Drain(VideoCommon::Nx2Profile::DrainCause::MmeDmaRead);
     if (VideoCommon::Nx2Profile::Enabled()) {
         // Diagnostics: how many of these reads could skip the drain (no GPU-written page).
         bool gpu_written = false;
