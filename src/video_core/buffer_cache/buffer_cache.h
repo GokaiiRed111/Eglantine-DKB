@@ -2312,6 +2312,31 @@ void BufferCache<P>::TouchBuffer(Buffer& buffer, BufferId buffer_id) noexcept {
 
 template <class P>
 bool BufferCache<P>::SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 size) {
+    if (!Nx2DrawTuning() || size == 0) {
+        return SynchronizeBufferPages(buffer, device_addr, size);
+    }
+    // No page of the range became CPU modified since this buffer's range was last checked: there
+    // is nothing to upload (the check walks every page; Bananza binds the same buffers thousands
+    // of times a frame).
+    const u64 epoch = memory_tracker.CpuWriteEpoch(device_addr, size);
+    if (epoch == ~u64{0}) {
+        return SynchronizeBufferPages(buffer, device_addr, size);
+    }
+    const size_t slot_index =
+        static_cast<size_t>(((device_addr >> 6) ^ (device_addr >> 20) ^ size) %
+                            nx2_synced_ranges.size());
+    Nx2SyncedRange& slot = nx2_synced_ranges[slot_index];
+    if (slot.buffer == &buffer && slot.device_addr == device_addr && slot.size == size &&
+        slot.epoch == epoch) {
+        return true;
+    }
+    const bool synchronized = SynchronizeBufferPages(buffer, device_addr, size);
+    slot = {&buffer, device_addr, size, epoch};
+    return synchronized;
+}
+
+template <class P>
+bool BufferCache<P>::SynchronizeBufferPages(Buffer& buffer, DAddr device_addr, u32 size) {
 #ifdef __ANDROID__
     const bool use_optimized_vertex_buffers =
         Settings::values.use_optimized_vertex_buffers.GetValue();
