@@ -34,14 +34,16 @@ namespace VideoCommon::Nx2Sampler {
 namespace {
 
 constexpr size_t MaxDepth = 32;
-constexpr size_t MaxThreads = 4;
+constexpr size_t MaxThreads = 8;
 
 struct Target {
     HANDLE handle{};
     std::string name;
     u64 samples{};
-    /// Stacks (innermost first) and how often each was seen.
+    /// Stacks (innermost first) and how often each was seen: all, and since the last write.
     std::map<std::vector<u64>, u64> stacks;
+    std::map<std::vector<u64>, u64> window_stacks;
+    u64 window_samples{};
 };
 
 struct State {
@@ -64,12 +66,41 @@ bool Enabled() {
     return enabled;
 }
 
+// Code mapped from a module (MEM_IMAGE): its unwind tables are static. Other code (the CPU
+// JIT's) is not unwound: looking its tables up could wait on a lock the suspended thread holds.
+// Asks the kernel (VirtualQuery takes no user-mode lock), remembering the image ranges found.
+bool InImage(u64 address) {
+    struct Range {
+        u64 begin;
+        u64 end;
+    };
+    static std::array<Range, 128> ranges{};
+    static size_t count = 0;
+    for (size_t i = 0; i < count; ++i) {
+        if (address >= ranges[i].begin && address < ranges[i].end) {
+            return true;
+        }
+    }
+    MEMORY_BASIC_INFORMATION info{};
+    if (VirtualQuery(reinterpret_cast<LPCVOID>(address), &info, sizeof(info)) == 0 ||
+        info.Type != MEM_IMAGE) {
+        return false;
+    }
+    const u64 begin = reinterpret_cast<u64>(info.BaseAddress);
+    ranges[count % ranges.size()] = {begin, begin + info.RegionSize};
+    count = (std::min)(count + 1, ranges.size());
+    return true;
+}
+
 // Walks the suspended thread's stack from its context. Only reads its memory and the unwind
 // tables; allocates nothing (the thread may hold the heap lock).
 size_t Walk(CONTEXT context, std::array<u64, MaxDepth>& frames) {
     size_t depth = 0;
     while (depth < MaxDepth && context.Rip != 0) {
         frames[depth++] = context.Rip;
+        if (!InImage(context.Rip)) {
+            break;
+        }
         DWORD64 image_base{};
         const PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &image_base, nullptr);
         if (function == nullptr) {
@@ -110,11 +141,11 @@ std::string Describe(u64 address, std::unordered_map<u64, std::string>& modules)
     return fmt::format("{}+{:x}", it->second, address - base);
 }
 
-void Write(State& state) {
+void Write(State& state, bool window, const std::string& file_name) {
     using namespace Common::FS;
     // Written beside it and moved over it: a write cut short by the emulator closing left half
     // a file, without the threads after the first.
-    const auto path = GetEdenPath(EdenPath::LogDir) / "nx2_samples.txt";
+    const auto path = GetEdenPath(EdenPath::LogDir) / file_name;
     auto temporary = path;
     temporary += ".tmp";
     std::FILE* file = _wfopen(temporary.c_str(), L"w");
@@ -124,12 +155,14 @@ void Write(State& state) {
     std::unordered_map<u64, std::string> modules;
     for (size_t i = 0; i < state.count.load(); ++i) {
         const Target& target = state.targets[i];
+        const auto& stacks = window ? target.window_stacks : target.stacks;
         std::fprintf(file, "thread %s: %llu samples\n", target.name.c_str(),
-                     static_cast<unsigned long long>(target.samples));
+                     static_cast<unsigned long long>(window ? target.window_samples
+                                                            : target.samples));
         // Most frequent first.
         std::vector<std::pair<u64, const std::vector<u64>*>> order;
-        order.reserve(target.stacks.size());
-        for (const auto& [stack, seen] : target.stacks) {
+        order.reserve(stacks.size());
+        for (const auto& [stack, seen] : stacks) {
             order.emplace_back(seen, &stack);
         }
         std::sort(order.begin(), order.end(),
@@ -153,6 +186,7 @@ void Run(std::stop_token stop_token) {
     auto next_write = std::chrono::steady_clock::now() + std::chrono::seconds{10};
     std::array<u64, MaxDepth> frames{};
     std::vector<u64> stack;
+    u32 window_index = 0;
     while (!stop_token.stop_requested()) {
         Sleep(1);
         const size_t count = state.count.load();
@@ -174,11 +208,21 @@ void Run(std::stop_token stop_token) {
             stack.assign(frames.begin(), frames.begin() + depth);
             ++target.stacks[stack];
             ++target.samples;
+            ++target.window_stacks[stack];
+            ++target.window_samples;
         }
         if (std::chrono::steady_clock::now() >= next_write) {
+            // The whole run, and each 10 s apart (nx2_samples_w<n>.txt, to pick a stretch of it).
             next_write += std::chrono::seconds{10};
-            Write(state);
-            LOG_INFO(HW_GPU, "Sampler: stacks written to nx2_samples.txt");
+            ++window_index;
+            Write(state, false, "nx2_samples.txt");
+            Write(state, true, fmt::format("nx2_samples_w{}.txt", window_index));
+            for (size_t i = 0; i < state.count.load(); ++i) {
+                state.targets[i].window_stacks.clear();
+                state.targets[i].window_samples = 0;
+            }
+            LOG_INFO(HW_GPU, "Sampler: stacks written to nx2_samples.txt and nx2_samples_w{}.txt",
+                     window_index);
         }
     }
 }

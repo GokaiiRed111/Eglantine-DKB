@@ -7,8 +7,9 @@ namespace VideoCommon::Nx2Sampler {
 
 /// EDEN_NX2_SAMPLE=1 (Windows): samples the calling thread's call stack about every millisecond
 /// from a separate thread and writes the stacks, with how often each was seen, to
-/// nx2_samples.txt in the log directory every 10 s (addresses as module+offset, for the linker's
-/// map file). Call from the thread itself, once, as it starts. Does nothing otherwise.
+/// nx2_samples.txt in the log directory every 10 s, and those of each 10 s to nx2_samples_w<n>.txt
+/// (addresses as module+offset, for the linker's map file; JIT code is not unwound). Call from
+/// the thread itself, once, as it starts. Does nothing otherwise.
 void RegisterCurrentThread(const char* name);
 
 } // namespace VideoCommon::Nx2Sampler
