@@ -295,7 +295,8 @@ jobs:
             -DUSE_DISCORD_PRESENCE=OFF \
             -DUSE_CCACHE=ON
 
-      # MinGW build: system Qt and libraries from MSYS2, clang plus Eden's PGO profile. The profile
+      # MinGW build: system Qt and libraries from MSYS2, clang plus Eden's PGO profile, and the
+      # linker's map file (-Xlink=-map: eglantine.map, for EDEN_NX2_SAMPLE's addresses). The profile
       # path is converted to its Windows form because clang runs with the MSYS mount underneath.
       - name: Configure MinGW PGO
         if: matrix.mingw
@@ -321,7 +322,7 @@ jobs:
             -DUSE_CCACHE=ON \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
-            -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld \
+            "-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld -Wl,-Xlink=-map" \
             "-DCMAKE_C_FLAGS=$profile" \
             "-DCMAKE_CXX_FLAGS=$profile"
 
@@ -413,6 +414,10 @@ jobs:
           cd build/release/bin
           test -f eglantine.exe
           test -f eden-cli.exe
+          # The linker's map of eglantine.exe stays beside it: it names the functions behind the
+          # addresses EDEN_NX2_SAMPLE records.
+          rm -f eden-cli.map
+          ls -la eglantine.map || true
           windeployqt6 --no-translations --no-compiler-runtime --no-opengl-sw \
             --no-system-dxc-compiler --no-system-d3d-compiler eglantine.exe
           deps() {
