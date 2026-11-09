@@ -222,8 +222,7 @@ void GpuSplit::Publish() {
 }
 
 void GpuSplit::Drain(Nx2Profile::WaitSite site) {
-    consumed_cache = consumed.load(std::memory_order_acquire);
-    if (consumed_cache == write_position && BackQuiet()) {
+    if (CaughtUp()) {
         return;
     }
     Publish();

@@ -770,20 +770,26 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
     if (!IsGpuWrittenCommands(address, size)) {
         return;
     }
-    // The caches belong to the split's back: it first runs what the front queued (the dispatch
-    // that writes these words among it). The whole pages are flushed: their next lists read
-    // guest memory until GPU work writes them again.
-    VideoCommon::GpuSplit::Get().Drain(VideoCommon::Nx2Profile::WaitSite::CommandList);
+    // The caches belong to the split's back, and it runs what the front queued in order (the
+    // dispatch that writes these words among it). So the dirty check and the download are queued
+    // behind that work and the front waits once, not once to drain and again to flush. The
+    // download records into the Vulkan scheduler, which only the back may use. The whole pages
+    // are flushed: their next lists read guest memory until GPU work writes them again.
     const GPUVAddr first_page = address & ~GPUVAddr{0xfff};
     const GPUVAddr end_page = (address + size + 0xfff) & ~GPUVAddr{0xfff};
-    if (memory_manager.IsMemoryDirty(first_page, end_page - first_page,
-                                     VideoCommon::CacheType::BufferCache)) {
-        // The download records into the Vulkan scheduler, which the split's back owns: a drained
-        // back still submits from its idle hook, so the front must not flush these pages itself.
-        VideoCommon::GpuSplit::Get().Run(VideoCommon::Nx2Profile::WaitSite::CommandFlush,
-            [memory = &memory_manager, first_page, size = end_page - first_page] {
-                memory->FlushRegion(first_page, size, VideoCommon::CacheType::BufferCache);
-            });
+    const u64 page_bytes = end_page - first_page;
+    auto& split = VideoCommon::GpuSplit::Get();
+    // With nothing queued the back's caches are quiet: a clean page needs no wait at all.
+    if (!split.CaughtUp() ||
+        memory_manager.IsMemoryDirty(first_page, page_bytes, VideoCommon::CacheType::BufferCache)) {
+        split.Run(VideoCommon::Nx2Profile::WaitSite::CommandList,
+                  [memory = &memory_manager, first_page, page_bytes] {
+                      if (memory->IsMemoryDirty(first_page, page_bytes,
+                                                VideoCommon::CacheType::BufferCache)) {
+                          memory->FlushRegion(first_page, page_bytes,
+                                              VideoCommon::CacheType::BufferCache);
+                      }
+                  });
     }
     if (rasterizer == nullptr) {
         return;

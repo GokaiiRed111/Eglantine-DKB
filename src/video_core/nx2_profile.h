@@ -83,7 +83,6 @@ enum class WaitSite : u32 {
     RingFull,       ///< The ring to the back was full (GpuSplit::WaitForSpace)
     Writers,        ///< Compute and copy work that may write command lists (WaitForWriters)
     CommandList,    ///< A command list on pages the GPU writes (DmaPusher)
-    CommandFlush,   ///< Download of such a list's pages (DmaPusher)
     Semaphore,      ///< Semaphore acquires and the releases they wait for (Puller)
     SemaphoreFlush, ///< Download of a GPU-written semaphore word (Puller)
     Fences,         ///< Fences released or signalled (Puller, DmaPusher)
@@ -96,7 +95,7 @@ enum class WaitSite : u32 {
 };
 
 inline constexpr std::array<const char*, static_cast<size_t>(WaitSite::Count)> wait_site_names{
-    "ring full",  "writers",     "command list", "command flush", "semaphore",
+    "ring full",  "writers",     "command list", "semaphore",
     "semaphore flush", "fences", "mme dma read", "mme verify",    "engine takeover",
     "gpu map",    "stop",
 };

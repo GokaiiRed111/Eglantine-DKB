@@ -145,6 +145,12 @@ public:
     void Publish();
     /// Waits until the back executed everything sent so far. `site` says why, for the profiler.
     void Drain(Nx2Profile::WaitSite site);
+    /// Whether the back already executed everything sent and is done with the Vulkan scheduler,
+    /// so Drain would return at once. Front only. While it holds, the front may read back state.
+    [[nodiscard]] bool CaughtUp() {
+        consumed_cache = consumed.load(std::memory_order_acquire);
+        return consumed_cache == write_position && BackQuiet();
+    }
 
     /// Compute or copy work was just sent: what can write GPU-written command lists.
     void NoteWriter() {
