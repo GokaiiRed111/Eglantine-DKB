@@ -20,6 +20,10 @@ namespace Tegra::Engines {
 class EngineInterface;
 }
 
+namespace VideoCommon::Nx2Profile {
+enum class WaitSite : u32; // nx2_profile.h
+}
+
 namespace VideoCommon {
 
 // Splits the GPU thread in two (NX2_GPU_THREAD_SPLIT.md). The GPU thread (the front) takes the
@@ -123,13 +127,13 @@ public:
     /// cache download that records into the Vulkan scheduler. A drained back still submits from
     /// its idle hook, so the front never touches that state itself.
     template <typename Func>
-    void Run(const Func& func) {
+    void Run(Nx2Profile::WaitSite site, const Func& func) {
         if (on_back_thread || !active) {
             func();
             return;
         }
         Defer(func);
-        Drain();
+        Drain(site);
     }
 
     /// EDEN_NX2_SPLIT_CHECK=1 (debug): reports, with its stack, a thread other than the back
@@ -139,8 +143,8 @@ public:
 
     /// Makes what was sent visible to the back.
     void Publish();
-    /// Waits until the back executed everything sent so far.
-    void Drain();
+    /// Waits until the back executed everything sent so far. `site` says why, for the profiler.
+    void Drain(Nx2Profile::WaitSite site);
 
     /// Compute or copy work was just sent: what can write GPU-written command lists.
     void NoteWriter() {

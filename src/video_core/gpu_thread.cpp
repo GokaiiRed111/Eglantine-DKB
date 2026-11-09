@@ -103,7 +103,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                     if (run->before_later_reads) {
                         // GPU memory maps unmap caches (UnmapMemory downloads): the back's state.
                         split.DeferFunction(std::move(run->func));
-                        split.Drain();
+                        split.Drain(VideoCommon::Nx2Profile::WaitSite::GpuMap);
                     } else {
                         split.DeferFunction(std::move(run->func));
                     }

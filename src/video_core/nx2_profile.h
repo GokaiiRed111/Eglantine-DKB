@@ -77,9 +77,35 @@ inline u64 Now() {
     return static_cast<u64>(Common::g_wall_clock.GetTimeNS().count());
 }
 
+/// Why the split's front waited for its back (gpu_split.h): GpuSplit::Drain and Run take one,
+/// and the report logs each site's time and count. All but Writers are in the split drain zone.
+enum class WaitSite : u32 {
+    RingFull,       ///< The ring to the back was full (GpuSplit::WaitForSpace)
+    Writers,        ///< Compute and copy work that may write command lists (WaitForWriters)
+    CommandList,    ///< A command list on pages the GPU writes (DmaPusher)
+    CommandFlush,   ///< Download of such a list's pages (DmaPusher)
+    Semaphore,      ///< Semaphore acquires and the releases they wait for (Puller)
+    SemaphoreFlush, ///< Download of a GPU-written semaphore word (Puller)
+    Fences,         ///< Fences released or signalled (Puller, DmaPusher)
+    MmeDmaRead,     ///< Words the native MME reads with DMA (Maxwell3D)
+    MmeVerify,      ///< EDEN_NX2 MME check against the back (Maxwell3D, debug)
+    EngineTakeover, ///< The front takes an engine's state over (Maxwell3D, KeplerCompute)
+    GpuMap,         ///< GPU memory maps that unmap caches (GPU thread)
+    Stop,           ///< The split stops for accuracy settings
+    Count,
+};
+
+inline constexpr std::array<const char*, static_cast<size_t>(WaitSite::Count)> wait_site_names{
+    "ring full",  "writers",     "command list", "command flush", "semaphore",
+    "semaphore flush", "fences", "mme dma read", "mme verify",    "engine takeover",
+    "gpu map",    "stop",
+};
+
 struct ThreadData {
     std::array<u64, static_cast<size_t>(Zone::Count)> exclusive_ns{};
     std::array<u64, static_cast<size_t>(Zone::Count)> count{};
+    std::array<u64, static_cast<size_t>(WaitSite::Count)> wait_ns{};
+    std::array<u64, static_cast<size_t>(WaitSite::Count)> wait_count{};
     std::array<u64, 8> counters{}; ///< See Counter
     u64 child_ns{};    ///< Time of the zones nested in the current one
     u64 window_start{};
@@ -118,6 +144,34 @@ private:
     bool enabled;
     u64 start{};
     u64 parent_child_ns{};
+};
+
+/// Times one wait of the split's front for its back and adds it to its site. Create it only
+/// once the wait is certain (after the early returns), so the counts are real waits.
+class WaitScope {
+public:
+    explicit WaitScope(WaitSite site_) : site{site_}, enabled{Enabled()} {
+        if (enabled) {
+            start = Now();
+        }
+    }
+
+    ~WaitScope() {
+        if (!enabled) {
+            return;
+        }
+        const auto index = static_cast<size_t>(site);
+        t_data.wait_ns[index] += Now() - start;
+        ++t_data.wait_count[index];
+    }
+
+    WaitScope(const WaitScope&) = delete;
+    WaitScope& operator=(const WaitScope&) = delete;
+
+private:
+    WaitSite site;
+    bool enabled;
+    u64 start{};
 };
 
 /// Amounts counted on the GPU thread, logged per second with the zones.
@@ -190,6 +244,14 @@ inline void Report(const char* thread_name = "GPU thread") {
     line += fmt::format(" | acquires {:.0f} ({:.0f} waited)",
                         static_cast<double>(data.counters[6]) * 1e9 / window,
                         static_cast<double>(data.counters[7]) * 1e9 / window);
+    for (size_t i = 0; i < data.wait_count.size(); ++i) {
+        if (data.wait_count[i] == 0) {
+            continue;
+        }
+        const double ms = static_cast<double>(data.wait_ns[i]) * 1000.0 / window;
+        const double calls = static_cast<double>(data.wait_count[i]) * 1e9 / window;
+        line += fmt::format(" | wait {} {:.1f} ms ({:.0f}/s)", wait_site_names[i], ms, calls);
+    }
     LOG_INFO(HW_GPU, "{} per second:{}", thread_name, line);
     data = {};
     data.window_start = now;
